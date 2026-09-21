@@ -1,13 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../core/providers.dart';
 import '../../data/repositories/clinic_repository.dart';
-
-/// Repository provider. Override this in your ProviderScope if you
-/// want to inject a mock or a demo repository.
-final clinicRepositoryProvider = Provider<ClinicRepository>((ref) {
-  return FirebaseClinicRepository();
-});
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -40,28 +36,48 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     });
 
     try {
-      final repo = ref.read(clinicRepositoryProvider);
-      await repo.signIn(
-        _emailController.text.trim(),
-        _passwordController.text,
-      );
+      await ref.read(clinicRepositoryProvider).signIn(
+            _emailController.text.trim(),
+            _passwordController.text,
+          );
 
       if (!mounted) return;
-
-      // TODO: replace with your router / navigation.
-      // Example:
-      // context.go('/dashboard');
-      Navigator.of(context).pushReplacementNamed('/home');
+      context.go('/dashboard');
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-      });
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) {
-        setState(() {
-          _loading = false;
-        });
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _tryDemo() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      ref.read(demoModeProvider.notifier).state = true;
+      final repository = ref.read(clinicRepositoryProvider);
+
+      if (repository is! DemoClinicRepository) {
+        throw StateError('Failed to enter isolated demo mode.');
+      }
+
+      await repository.signInAsDemoGuest();
+
+      if (!mounted) return;
+      context.go('/dashboard');
+    } catch (e) {
+      ref.read(demoModeProvider.notifier).state = false;
+      if (!mounted) return;
+      setState(() => _error = e.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
       }
     }
   }
@@ -105,11 +121,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.email_outlined),
                       ),
-                      validator: (v) {
-                        if (v == null || v.trim().isEmpty) {
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
                           return 'Email is required';
                         }
-                        if (!v.contains('@')) {
+                        if (!value.contains('@')) {
                           return 'Enter a valid email';
                         }
                         return null;
@@ -125,12 +141,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.lock_outline),
                       ),
-                      validator: (v) {
-                        if (v == null || v.isEmpty) {
-                          return 'Password is required';
-                        }
-                        return null;
-                      },
+                      validator: (value) =>
+                          value == null || value.isEmpty
+                              ? 'Password is required'
+                              : null,
                       onFieldSubmitted: (_) => _loading ? null : _signIn(),
                     ),
                     if (_error != null) ...[
@@ -175,6 +189,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 'Sign In',
                                 style: TextStyle(fontSize: 16),
                               ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 50,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _loading ? null : _tryDemo,
+                        icon: const Icon(Icons.play_circle_outline),
+                        label: const Text('Try Demo — no account needed'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.orange.shade100,
+                          foregroundColor: Colors.orange.shade900,
+                        ),
                       ),
                     ),
                   ],
