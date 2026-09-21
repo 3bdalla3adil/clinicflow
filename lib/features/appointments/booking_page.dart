@@ -120,7 +120,7 @@ class _BookingPageState extends ConsumerState<BookingPage> {
                           startTime: time,
                         );
 
-                    if (!mounted) return;
+                    if (!context.mounted) return;
 
                     await showDialog<void>(
                       context: context,
