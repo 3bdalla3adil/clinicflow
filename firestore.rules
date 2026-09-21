@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn(){ return request.auth != null; }
+    function userDoc(){ return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function clinic(c){ return signedIn() && userDoc().clinicId == c; }
+    function role(r){ return signedIn() && userDoc().role == r; }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || role('admin'));
+      allow create,update,delete: if role('admin');
+    }
+
+    match /clinics/{clinicId} {
+      allow read: if clinic(clinicId);
+      match /doctors/{id} {
+        allow read: if clinic(clinicId);
+        allow write: if role('admin');
+      }
+      match /services/{id} {
+        allow read: if clinic(clinicId);
+        allow write: if role('admin');
+      }
+      match /appointments/{id} {
+        allow read: if clinic(clinicId) && (
+          role('admin') || role('reception') || role('doctor') ||
+          resource.data.patientId == request.auth.uid
+        );
+        allow create: if clinic(clinicId) &&
+          (role('admin') || role('reception') || role('patient')) &&
+          request.resource.data.patientId == request.auth.uid;
+        allow update: if clinic(clinicId) && (role('admin') || role('reception') || role('doctor'));
+        allow delete: if role('admin');
+      }
+      match /audit_logs/{id} {
+        allow read: if clinic(clinicId) && role('admin');
+        allow create: if clinic(clinicId) && request.resource.data.actorId == request.auth.uid;
+        allow update,delete: if false;
+      }
+      match /patients/{patientId} {
+        allow read: if clinic(clinicId) && (role('admin') || role('reception') || role('doctor') || (role('patient') && patientId == request.auth.uid));
+        allow write: if clinic(clinicId) && (role('admin') || role('reception'));
+      }
+    }
+  }
+}
