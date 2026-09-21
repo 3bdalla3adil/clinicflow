@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore { match /databases/{database}/documents {
+  function signedIn() { return request.auth != null; }
+  function user() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+  function role(r) { return signedIn() && user().roleId == r; }
+  match /users/{id} { allow read: if signedIn() && (request.auth.uid == id || role('ADMIN')); allow create: if signedIn() && request.auth.uid == id; allow update: if signedIn() && request.auth.uid == id && !('roleId' in request.resource.data.diff(resource.data).affectedKeys()) && !('clinicId' in request.resource.data.diff(resource.data).affectedKeys()); }
+  match /doctors/{id} { allow read: if signedIn(); allow write: if role('ADMIN'); }
+  match /services/{id} { allow read: if signedIn(); allow write: if role('ADMIN'); }
+  match /appointments/{id} { allow read: if signedIn() && (resource.data.patientId == request.auth.uid || role('ADMIN') || role('RECEPTION') || role('DOCTOR')); allow create: if signedIn(); allow update: if role('ADMIN') || role('RECEPTION') || role('DOCTOR'); allow delete: if false; }
+  match /consultations/{id} { allow read, write: if role('ADMIN') || role('DOCTOR'); }
+  match /payments/{id} { allow read, write: if role('ADMIN') || role('RECEPTION') || role('ACCOUNTANT'); }
+  match /auditLogs/{id} { allow read: if role('ADMIN'); allow create: if signedIn(); allow update, delete: if false; }
+  match /{document=**} { allow read, write: if false; }
+} }
