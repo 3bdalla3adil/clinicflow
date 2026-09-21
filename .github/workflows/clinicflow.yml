@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +15,7 @@ env:
   APP: clinicflow
 
 jobs:
+  # ---------- Analyze + Test ----------
   analyze-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +28,51 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  # ---------- Android APK ----------
+  build-apk:
+    needs: analyze-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform
+        run: flutter create . --platforms=android --org ${{ env.ORG }} --project-name ${{ env.APP }}
+
+      - name: Add Firebase config (Android)
+        run: |
+          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 -d > android/app/google-services.json
+          ls -la android/app/google-services.json
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK (release)
+        run: flutter build apk --release
+
+      - name: Verify APK exists
+        run: |
+          ls -la build/app/outputs/flutter-apk/
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------- iOS IPA (unsigned, for Sideloadly) ----------
   build-ipa:
     needs: analyze-and-test
     runs-on: macos-latest
@@ -39,24 +87,40 @@ jobs:
       - name: Generate iOS platform
         run: flutter create . --platforms=ios --org ${{ env.ORG }} --project-name ${{ env.APP }}
 
-      - name: Add Firebase config
-        run: echo "${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}" | base64 -d > ios/Runner/GoogleService-Info.plist
+      - name: Add Firebase config (iOS)
+        run: |
+          echo "${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}" | base64 -d > ios/Runner/GoogleService-Info.plist
+          ls -la ios/Runner/GoogleService-Info.plist
 
-      - run: flutter pub get
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: CocoaPods install
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
 
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
         run: |
+          set -e
+          cd build/ios/iphoneos
           rm -rf Payload app-release-unsigned.ipa
           mkdir -p Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -r app-release-unsigned.ipa Payload
+          cp -R Runner.app Payload/
+          zip -r -y app-release-unsigned.ipa Payload
+          echo "=== IPA created ==="
           ls -la app-release-unsigned.ipa
+          echo "=== IPA contents (first 20) ==="
+          unzip -l app-release-unsigned.ipa | head -20
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
           name: app-release-ipa-unsigned
-          path: app-release-unsigned.ipa
+          path: build/ios/iphoneos/app-release-unsigned.ipa
           if-no-files-found: error
+          retention-days: 30
