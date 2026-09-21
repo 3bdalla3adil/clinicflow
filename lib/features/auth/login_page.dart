@@ -15,8 +15,9 @@ class _LoginPageState extends ConsumerState<LoginPage>{
   bool loading=false; String? error;
   Future<void> _signIn() async{
     FocusScope.of(context).unfocus(); setState(()=>loading=true);
-    try{
       await ref.read(clinicRepositoryProvider).signIn(email.text,password.text);
+        if (!mounted) return;                  // ← add this right after every await
+            Navigator.of(context).pushReplacement(...);
       ref.invalidate(currentUserProvider); ref.invalidate(appointmentsProvider);
       if(!context.mounted)return; context.go('/dashboard');
     }catch(_){
