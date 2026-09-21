@@ -1,58 +1,34 @@
-name: Flutter Auto-Fix
+name: CI
 
 on:
   push:
     branches: [main]
-    paths:
-      - '**.dart'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  autofix:
+  analyze-and-test:
     runs-on: ubuntu-latest
-    # Don't loop: skip if the commit was made by the bot itself
-    if: github.actor != 'github-actions[bot]'
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
           cache: true
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Apply automatic fixes
-        run: dart fix --apply
-
-      - name: Format code
-        run: dart format lib test || true
-
-      - name: Verify analyzer is clean
+      - name: Analyze
         run: flutter analyze
-        continue-on-error: true
 
-      - name: Commit and push if changes were made
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git add -A
-            git commit -m "chore: auto-fix analyzer warnings [skip ci]"
-            git push
-            echo "✅ Fixes pushed to main"
-          else
-            echo "ℹ️ No changes to commit"
-          fi
+      - name: Run tests
+        run: flutter test
