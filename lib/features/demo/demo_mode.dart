@@ -36,10 +36,7 @@ class DemoBanner extends ConsumerWidget {
                   ref.invalidate(currentUserProvider);
                   ref.invalidate(appointmentsProvider);
                   if (!context.mounted) return;
-                  ref.read(routerRefreshProvider);
-                  // The app uses go_router; this keeps the banner action
-                  // independent of route implementation details.
-                  Navigator.of(context).popUntil((route) => route.isFirst);
+                  context.go('/login');
                 },
                 style: TextButton.styleFrom(
                   foregroundColor: Colors.white,
@@ -55,6 +52,3 @@ class DemoBanner extends ConsumerWidget {
     );
   }
 }
-
-/// Placeholder provider used to make the banner depend only on app state.
-final routerRefreshProvider = Provider<void>((_) {});
