@@ -13,9 +13,6 @@ final clinicRepositoryProvider = Provider<ClinicRepository>((ref) {
   if (ref.watch(demoModeProvider)) {
     return DemoClinicRepository();
   }
-  if (!Firebase.apps.isNotEmpty) {
-    return DemoClinicRepository();
-  }
   return FirebaseClinicRepository();
 });
 
