@@ -3,97 +3,59 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  ORG: com.example
+  APP: clinicflow
+
 jobs:
-  # ---------- Analyze + Test ----------
   analyze-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Analyze
-        run: flutter analyze
-
-      - name: Run tests
-        run: flutter test
-
-  # ---------- Android APK ----------
-  build-apk:
-    needs: analyze-and-test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: zulu
-          java-version: '17'
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-
-  # ---------- iOS IPA (unsigned by default) ----------
   build-ipa:
     needs: analyze-and-test
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Generate iOS platform
+        run: flutter create . --platforms=ios --org ${{ env.ORG }} --project-name ${{ env.APP }}
+
+      - name: Add Firebase config
+        run: echo "${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}" | base64 -d > ios/Runner/GoogleService-Info.plist
+
+      - run: flutter pub get
 
       - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
         run: |
+          rm -rf Payload app-release-unsigned.ipa
           mkdir -p Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/ || true
+          cp -R build/ios/iphoneos/Runner.app Payload/
           zip -r app-release-unsigned.ipa Payload
+          ls -la app-release-unsigned.ipa
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: app-release-ipa-unsigned
           path: app-release-unsigned.ipa
