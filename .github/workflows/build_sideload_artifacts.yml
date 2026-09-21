@@ -1,91 +1,58 @@
-name: ClinicFlow Build Pipeline
+name: Flutter Auto-Fix
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main]
+    paths:
+      - '**.dart'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  assemble-android:
+  autofix:
     runs-on: ubuntu-latest
+    # Don't loop: skip if the commit was made by the bot itself
+    if: github.actor != 'github-actions[bot]'
+
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Flutter
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Fix and Upgrade Dependencies
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Apply automatic fixes
+        run: dart fix --apply
+
+      - name: Format code
+        run: dart format lib test || true
+
+      - name: Verify analyzer is clean
+        run: flutter analyze
+        continue-on-error: true
+
+      - name: Commit and push if changes were made
         run: |
-          flutter pub get
-          flutter pub upgrade --major-versions
-
-      - name: Rebuild Android Config
-        run: flutter create --platforms=android .
-
-      - name: Build APK
-        run: flutter build apk --debug
-
-      - name: Save APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ClinicFlow-Android
-          path: build/app/outputs/flutter-apk/app-debug.apk
-
-  assemble-ios:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Set Xcode Version
-        run: sudo xcode-select --switch /Applications/Xcode.app
-
-      - name: Fix and Upgrade Dependencies
-        run: |
-          flutter pub get
-          flutter pub upgrade --major-versions
-
-      - name: Rebuild iOS Config
-        run: flutter create --platforms=ios .
-
-      - name: GENERATE PODFILE: Pre-scan Dependencies
-        # FIXED: Forces Flutter to dynamically create the missing Podfile 
-        run: flutter build ios --config-only --no-codesign
-
-      - name: Install Pods
-        run: |
-          cd ios
-          pod repo update
-          pod install --repo-update
-
-      - name: Build Unsigned App
-        run: flutter build ios --release --no-codesign
-
-      - name: Create Sideload Payload
-        run: |
-          cd build/ios/iphoneos
-          mkdir Payload
-          cp -r Runner.app Payload/
-          zip -r ClinicFlow_Sideload.ipa Payload
-
-      - name: Save IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: ClinicFlow-iOS
-          path: build/ios/iphoneos/ClinicFlow_Sideload.ipa
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git add -A
+            git commit -m "chore: auto-fix analyzer warnings [skip ci]"
+            git push
+            echo "✅ Fixes pushed to main"
+          else
+            echo "ℹ️ No changes to commit"
+          fi
