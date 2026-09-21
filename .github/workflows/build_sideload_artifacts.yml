@@ -5,6 +5,11 @@ on:
     branches: [ main, develop ]
   workflow_dispatch: 
 
+# TARGETED FIX: Directs actions to look inside your nested folder
+defaults:
+  run:
+    working-directory: "clinicflow"
+
 jobs:
   assemble-android:
     runs-on: ubuntu-latest
@@ -24,10 +29,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: CLOUD REPAIR: Dynamically Generate Android Scaffolding
-        # This injects the missing android directories directly in cloud memory
-        run: flutter create --platforms=android .
-
       - name: Fetch Manifest Dependencies
         run: flutter pub get
 
@@ -38,7 +39,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ClinicFlow-Android-Debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: "clinicflow/build/app/outputs/flutter-apk/app-debug.apk"
           compression-level: 9
 
   assemble-ios-sideload:
@@ -55,10 +56,6 @@ jobs:
 
       - name: Select Active Xcode Command Line Tools
         run: sudo xcode-select --switch /Applications/Xcode.app
-
-      - name: CLOUD REPAIR: Dynamically Generate iOS Scaffolding
-        # This injects the missing ios directories directly in cloud memory
-        run: flutter create --platforms=ios .
 
       - name: Install Application and Pod Bindings
         run: |
@@ -80,5 +77,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ClinicFlow-iOS-Sideloadly-Ready
-          path: build/ios/iphoneos/ClinicFlow_Sideload.ipa
+          path: "clinicflow/build/ios/iphoneos/ClinicFlow_Sideload.ipa"
           compression-level: 0
