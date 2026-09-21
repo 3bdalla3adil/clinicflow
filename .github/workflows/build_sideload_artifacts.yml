@@ -1,89 +1,87 @@
-name: ClinicFlow Cross-Platform Construction Pipeline
+name: ClinicFlow Build Pipeline
 
 on:
   push:
     branches: [ main, develop ]
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   assemble-android:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Java Development Kit
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Set up Flutter Toolchain
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: CLOUD UPGRADE: Force Overriding Outdated Dependencies
+      - name: Fix and Upgrade Dependencies
         run: |
           flutter pub get
           flutter pub upgrade --major-versions
 
-      - name: CLOUD REPAIR: Construct Clean Android Structural Templates
+      - name: Rebuild Android Config
         run: flutter create --platforms=android .
 
-      - name: Compile Debug Signed APK
+      - name: Build APK
         run: flutter build apk --debug
 
-      - name: Archive Android Testing Binary
+      - name: Save APK
         uses: actions/upload-artifact@v4
         with:
-          name: ClinicFlow-Android-Debug
+          name: ClinicFlow-Android
           path: build/app/outputs/flutter-apk/app-debug.apk
-          compression-level: 9
 
-  assemble-ios-sideload:
+  assemble-ios:
     runs-on: macos-latest
     steps:
-      - name: Checkout Code Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Flutter Toolchain
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Select Active Xcode Command Line Tools
+      - name: Set Xcode Version
         run: sudo xcode-select --switch /Applications/Xcode.app
 
-      - name: CLOUD UPGRADE: Force Overriding Outdated Dependencies
+      - name: Fix and Upgrade Dependencies
         run: |
           flutter pub get
           flutter pub upgrade --major-versions
 
-      - name: CLOUD REPAIR: Construct Clean iOS Structural Templates
+      - name: Rebuild iOS Config
         run: flutter create --platforms=ios .
 
-      - name: Install Application and Pod Bindings
+      - name: Install Pods
         run: |
           cd ios
           pod repo update
           pod install --repo-update
 
-      - name: Compile Release-Optimized iOS Infrastructure File Bundle
+      - name: Build Unsigned App
         run: flutter build ios --release --no-codesign
 
-      - name: Execute Automated Payload Transformation Wrapper For Sideloadly
+      - name: Create Sideload Payload
         run: |
           cd build/ios/iphoneos
           mkdir Payload
           cp -r Runner.app Payload/
           zip -r ClinicFlow_Sideload.ipa Payload
-          
-      - name: Archive Transformed iOS IPA Binary
+
+      - name: Save IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ClinicFlow-iOS-Sideloadly-Ready
+          name: ClinicFlow-iOS
           path: build/ios/iphoneos/ClinicFlow_Sideload.ipa
-          compression-level: 0
