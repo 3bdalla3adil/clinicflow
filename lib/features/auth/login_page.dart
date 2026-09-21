@@ -43,8 +43,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         error = 'Unable to sign in. Please try again.';
       });
     } finally {
-      if (!mounted) return;
-      setState(() => loading = false);
+      if (mounted) {
+        setState(() => loading = false);
+      }
     }
   }
 
