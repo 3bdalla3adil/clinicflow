@@ -7,8 +7,11 @@ class ClinicFlowApp extends ConsumerWidget {
   const ClinicFlowApp({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
-    title: 'ClinicFlow', debugShowCheckedModeBanner: false,
-    theme: clinicTheme(Brightness.light), darkTheme: clinicTheme(Brightness.dark),
-    themeMode: ThemeMode.system, routerConfig: ref.watch(routerProvider),
-  );
+        title: 'ClinicFlow',
+        debugShowCheckedModeBanner: false,
+        theme: clinicTheme(Brightness.light),
+        darkTheme: clinicTheme(Brightness.dark),
+        themeMode: ThemeMode.system,
+        routerConfig: ref.watch(routerProvider),
+      );
 }

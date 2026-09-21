@@ -7,12 +7,14 @@ import '../features/appointments/appointments_page.dart';
 import '../features/profile/profile_page.dart';
 
 final routerProvider = Provider<GoRouter>((ref) => GoRouter(
-  initialLocation: '/login',
-  routes: [
-    GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
-    GoRoute(path: '/dashboard', builder: (_, __) => const DashboardPage()),
-    GoRoute(path: '/appointments', builder: (_, __) => const AppointmentsPage()),
-    GoRoute(path: '/book', builder: (_, __) => const BookingPage()),
-    GoRoute(path: '/profile', builder: (_, __) => const ProfilePage()),
-  ],
-));
+      initialLocation: '/login',
+      routes: [
+        GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
+        GoRoute(path: '/dashboard', builder: (_, __) => const DashboardPage()),
+        GoRoute(
+            path: '/appointments',
+            builder: (_, __) => const AppointmentsPage()),
+        GoRoute(path: '/book', builder: (_, __) => const BookingPage()),
+        GoRoute(path: '/profile', builder: (_, __) => const ProfilePage()),
+      ],
+    ));

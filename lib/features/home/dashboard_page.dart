@@ -1,3 +1,65 @@
-import 'package:flutter/material.dart'; import 'package:go_router/go_router.dart';
-class DashboardPage extends StatelessWidget { const DashboardPage({super.key}); @override Widget build(BuildContext context) => Scaffold(appBar:AppBar(title:const Text('ClinicFlow'), actions:[IconButton(onPressed:()=>context.go('/profile'),icon:const Icon(Icons.person_outline))]), body:ListView(padding:const EdgeInsets.all(20), children:[Text('Welcome, Patient',style:Theme.of(context).textTheme.headlineMedium),const SizedBox(height:8),const Text('Your care at a glance'),const SizedBox(height:24),Card(child:Padding(padding:const EdgeInsets.all(20),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[const Text('Next appointment'),const SizedBox(height:12),Text('No upcoming appointments',style:Theme.of(context).textTheme.titleLarge),const SizedBox(height:8),const Text('Book a visit when you are ready.')]))),const SizedBox(height:20),Wrap(spacing:12,runSpacing:12,children:[_Action('Book appointment',Icons.add_circle_outline,()=>context.push('/book')), _Action('My appointments',Icons.calendar_month,()=>context.push('/appointments')), _Action('Doctors',Icons.medical_services,()=>ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Doctor directory coming from Firestore.'))))]) ])); }
-class _Action extends StatelessWidget { const _Action(this.label,this.icon,this.onTap); final String label; final IconData icon; final VoidCallback onTap; @override Widget build(BuildContext c)=>SizedBox(width:160,height:100,child:Card(child:InkWell(onTap:onTap,borderRadius:BorderRadius.circular(12),child:Padding(padding:const EdgeInsets.all(12),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Icon(icon),const Spacer(),Text(label)]))))); }
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
+class DashboardPage extends StatelessWidget {
+  const DashboardPage({super.key});
+  @override
+  Widget build(BuildContext context) => Scaffold(
+      appBar: AppBar(title: const Text('ClinicFlow'), actions: [
+        IconButton(
+            onPressed: () => context.go('/profile'),
+            icon: const Icon(Icons.person_outline))
+      ]),
+      body: ListView(padding: const EdgeInsets.all(20), children: [
+        Text('Welcome, Patient',
+            style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 8),
+        const Text('Your care at a glance'),
+        const SizedBox(height: 24),
+        Card(
+            child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Next appointment'),
+                      const SizedBox(height: 12),
+                      Text('No upcoming appointments',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      const Text('Book a visit when you are ready.')
+                    ]))),
+        const SizedBox(height: 20),
+        Wrap(spacing: 12, runSpacing: 12, children: [
+          _Action('Book appointment', Icons.add_circle_outline,
+              () => context.push('/book')),
+          _Action('My appointments', Icons.calendar_month,
+              () => context.push('/appointments')),
+          _Action(
+              'Doctors',
+              Icons.medical_services,
+              () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Doctor directory coming from Firestore.'))))
+        ])
+      ]));
+}
+
+class _Action extends StatelessWidget {
+  const _Action(this.label, this.icon, this.onTap);
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext c) => SizedBox(
+      width: 160,
+      height: 100,
+      child: Card(
+          child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [Icon(icon), const Spacer(), Text(label)])))));
+}

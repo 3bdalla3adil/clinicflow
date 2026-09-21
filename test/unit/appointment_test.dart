@@ -1,1 +1,8 @@
-import 'package:flutter_test/flutter_test.dart'; import 'package:clinicflow/data/models/models.dart'; void main(){test('status labels are readable',(){expect(statusLabel(AppointmentStatus.inConsultation),'In consultation');});}
+import 'package:flutter_test/flutter_test.dart';
+import 'package:clinicflow/data/models/models.dart';
+
+void main() {
+  test('status labels are readable', () {
+    expect(statusLabel(AppointmentStatus.inConsultation), 'In consultation');
+  });
+}
