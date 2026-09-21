@@ -2,12 +2,14 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/models.dart';
+import 'demo_data.dart';
 
 abstract interface class ClinicRepository {
   Stream<AppUser?> watchCurrentUser();
   AppUser? get currentUser;
   Future<void> signIn(String email, String password);
   Future<void> signOut();
+  Future<void> signInAsDemoGuest();
   Future<List<Doctor>> getDoctors();
   Future<List<MedicalService>> getServices();
   Future<List<Appointment>> getAppointments({String? patientId});
@@ -115,6 +117,11 @@ class FirebaseClinicRepository implements ClinicRepository {
   }
 
   @override
+  Future<void> signInAsDemoGuest() async {
+    throw UnsupportedError('Demo guest sign-in is only available in demo mode.');
+  }
+
+  @override
   Future<List<Doctor>> getDoctors() async {
     final snapshot = await _collection('doctors').get();
     return snapshot.docs
@@ -194,83 +201,6 @@ class DemoCredential {
 }
 
 class DemoClinicRepository implements ClinicRepository {
-  static const demoCredentials = [
-    DemoCredential(
-      role: UserRole.admin,
-      name: 'Demo Administrator',
-      email: 'admin@demo.clinicflow.app',
-      password: 'ClinicFlow@Admin2026',
-      userId: 'DEMO-ADMIN-001',
-    ),
-    DemoCredential(
-      role: UserRole.reception,
-      name: 'Demo Receptionist',
-      email: 'reception@demo.clinicflow.app',
-      password: 'ClinicFlow@Reception2026',
-      userId: 'DEMO-RECEPTION-001',
-    ),
-    DemoCredential(
-      role: UserRole.doctor,
-      name: 'Dr. Demo Doctor',
-      email: 'doctor@demo.clinicflow.app',
-      password: 'ClinicFlow@Doctor2026',
-      userId: 'DEMO-DOCTOR-001',
-    ),
-    DemoCredential(
-      role: UserRole.accountant,
-      name: 'Demo Accountant',
-      email: 'accountant@demo.clinicflow.app',
-      password: 'ClinicFlow@Accountant2026',
-      userId: 'DEMO-ACCOUNTANT-001',
-    ),
-    DemoCredential(
-      role: UserRole.patient,
-      name: 'Demo Patient',
-      email: 'patient@demo.clinicflow.app',
-      password: 'ClinicFlow@Patient2026',
-      userId: 'DEMO-PATIENT-001',
-    ),
-  ];
-
-  static const _doctors = [
-    Doctor(
-      id: 'DOC-001',
-      name: 'Dr. Sara Ahmed',
-      specialty: 'General Medicine',
-      durationMinutes: 30,
-    ),
-    Doctor(
-      id: 'DOC-002',
-      name: 'Dr. Mohamed Ali',
-      specialty: 'Dermatology',
-      durationMinutes: 30,
-    ),
-    Doctor(
-      id: 'DOC-003',
-      name: 'Dr. Huda Osman',
-      specialty: 'Dental',
-      durationMinutes: 45,
-    ),
-  ];
-
-  static const _services = [
-    MedicalService(
-      id: 'SERVICE-001',
-      name: 'General Consultation',
-      price: 35,
-    ),
-    MedicalService(
-      id: 'SERVICE-002',
-      name: 'Dermatology Consultation',
-      price: 50,
-    ),
-    MedicalService(
-      id: 'SERVICE-003',
-      name: 'Dental Consultation',
-      price: 60,
-    ),
-  ];
-
   final List<Appointment> _appointments = [];
   AppUser? _user;
 
@@ -284,36 +214,30 @@ class DemoClinicRepository implements ClinicRepository {
 
   @override
   Future<void> signIn(String email, String password) async {
-    final trimmed = email.trim().toLowerCase();
-    DemoCredential? match;
-    for (final c in demoCredentials) {
-      if (c.email == trimmed) {
-        match = c;
-        break;
-      }
-    }
-    if (match == null || match.password != password) {
-      throw StateError('Invalid demo credentials.');
-    }
-    _user = AppUser(
-      id: match.userId,
-      email: match.email,
-      name: match.name,
-      role: match.role,
-      clinicId: 'DEMO-CLINIC-001',
+    throw UnsupportedError(
+      'Use Try Demo to enter the isolated demo environment.',
     );
+  }
+
+  @override
+  Future<void> signInAsDemoGuest() async {
+    _user = DemoData.user;
+    _appointments
+      ..clear()
+      ..addAll(DemoData.appointments());
   }
 
   @override
   Future<void> signOut() async {
     _user = null;
+    _appointments.clear();
   }
 
   @override
-  Future<List<Doctor>> getDoctors() async => _doctors;
+  Future<List<Doctor>> getDoctors() async => DemoData.doctors;
 
   @override
-  Future<List<MedicalService>> getServices() async => _services;
+  Future<List<MedicalService>> getServices() async => DemoData.services;
 
   @override
   Future<List<Appointment>> getAppointments({String? patientId}) async =>
@@ -326,12 +250,15 @@ class DemoClinicRepository implements ClinicRepository {
     required DateTime date,
     required String startTime,
   }) async {
-    final datePart = '${date.year}'
-        '${date.month.toString().padLeft(2, '0')}'
-        '${date.day.toString().padLeft(2, '0')}';
+    if (_user == null) {
+      throw StateError('Enter demo mode first.');
+    }
+
+    final datePart = date.toIso8601String().substring(0, 10).replaceAll('-', '');
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
     final appointment = Appointment(
-      id: 'APT-${DateTime.now().millisecondsSinceEpoch}',
-      number: 'APT-$datePart',
+      id: 'DEMO-APT-$timestamp',
+      number: 'APT-$datePart-$timestamp',
       doctor: doctor,
       service: service,
       date: date,
