@@ -1,0 +1,78 @@
+name: ClinicFlow Cross-Platform Construction Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch: # Allows you to manually trigger a build from the GitHub UI
+
+jobs:
+  # JOB 1: Compiles and Signs the Android Testing Package
+  assemble-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java Development Kit
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter Toolchain
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Fetch Manifest Dependencies
+        run: flutter pub get
+
+      - name: Compile Debug Signed APK
+        run: flutter build apk --debug
+
+      - name: Archive Android Testing Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClinicFlow-Android-Debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          compression-level: 9
+
+  # JOB 2: Compiles iOS and Transforms Payload Structure (No Account Required)
+  assemble-ios-sideload:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter Toolchain
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Select Active Xcode Command Line Tools
+        run: sudo xcode-select --switch /Applications/Xcode.app
+
+      - name: Install Application and Pod Bindings
+        run: |
+          flutter pub get
+          cd ios
+          pod install --repo-update
+
+      - name: Compile Release-Optimized iOS Infrastructure File Bundle
+        run: flutter build ios --release --no-codesign
+
+      - name: Execute Automated Payload Transformation Wrapper For Sideloadly
+        run: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r ClinicFlow_Sideload.ipa Payload
+          
+      - name: Archive Transformed iOS IPA Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClinicFlow-iOS-Sideloadly-Ready
+          path: build/ios/iphoneos/ClinicFlow_Sideload.ipa
+          compression-level: 0 # Fast transfer; file components inside are already fully zipped
