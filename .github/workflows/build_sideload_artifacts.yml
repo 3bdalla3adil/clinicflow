@@ -3,10 +3,9 @@ name: ClinicFlow Cross-Platform Construction Pipeline
 on:
   push:
     branches: [ main, develop ]
-  workflow_dispatch: # Allows you to manually trigger a build from the GitHub UI
+  workflow_dispatch: 
 
 jobs:
-  # JOB 1: Compiles and Signs the Android Testing Package
   assemble-android:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +24,10 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: CLOUD REPAIR: Dynamically Generate Android Scaffolding
+        # This injects the missing android directories directly in cloud memory
+        run: flutter create --platforms=android .
+
       - name: Fetch Manifest Dependencies
         run: flutter pub get
 
@@ -38,7 +41,6 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           compression-level: 9
 
-  # JOB 2: Compiles iOS and Transforms Payload Structure (No Account Required)
   assemble-ios-sideload:
     runs-on: macos-latest
     steps:
@@ -53,6 +55,10 @@ jobs:
 
       - name: Select Active Xcode Command Line Tools
         run: sudo xcode-select --switch /Applications/Xcode.app
+
+      - name: CLOUD REPAIR: Dynamically Generate iOS Scaffolding
+        # This injects the missing ios directories directly in cloud memory
+        run: flutter create --platforms=ios .
 
       - name: Install Application and Pod Bindings
         run: |
@@ -75,4 +81,4 @@ jobs:
         with:
           name: ClinicFlow-iOS-Sideloadly-Ready
           path: build/ios/iphoneos/ClinicFlow_Sideload.ipa
-          compression-level: 0 # Fast transfer; file components inside are already fully zipped
+          compression-level: 0
