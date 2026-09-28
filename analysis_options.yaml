@@ -1,9 +1,19 @@
-analyzer:
-  exclude:
-    - build/**
 include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    missing_required_param: error
+    missing_return: error
+    todo: ignore
+  exclude:
+    - '**/*.g.dart'
+    - '**/*.freezed.dart'
+
 linter:
   rules:
-    avoid_print: true
-    prefer_const_constructors: true
-    prefer_final_locals: true
+    - always_declare_return_types
+    - avoid_print
+    - prefer_const_constructors
+    - prefer_final_fields
+    - use_super_parameters
+    - require_trailing_commas

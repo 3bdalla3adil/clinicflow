@@ -1,0 +1,40 @@
+import 'package:flutter/material.dart';
+
+abstract class AppColors {
+  static const Color primary = Color(0xFF1565C0);
+  static const Color primaryLight = Color(0xFF5E92F3);
+  static const Color primaryDark = Color(0xFF003C8F);
+  static const Color primaryContainer = Color(0xFFD6E4FF);
+  static const Color secondary = Color(0xFF00897B);
+  static const Color secondaryLight = Color(0xFF4EBAAA);
+  static const Color secondaryDark = Color(0xFF005B4F);
+  static const Color secondaryContainer = Color(0xFFB2DFDB);
+  static const Color accent = Color(0xFF43A047);
+  static const Color statusConfirmed = Color(0xFF2E7D32);
+  static const Color statusPending = Color(0xFFF57C00);
+  static const Color statusCancelled = Color(0xFFC62828);
+  static const Color statusCompleted = Color(0xFF1565C0);
+  static const Color statusAvailable = Color(0xFF43A047);
+  static const Color error = Color(0xFFB71C1C);
+  static const Color errorContainer = Color(0xFFFFCDD2);
+  static const Color warning = Color(0xFFE65100);
+  static const Color warningContainer = Color(0xFFFFE0B2);
+  static const Color success = Color(0xFF1B5E20);
+  static const Color successContainer = Color(0xFFC8E6C9);
+  static const Color info = Color(0xFF01579B);
+  static const Color infoContainer = Color(0xFFB3E5FC);
+  static const Color backgroundLight = Color(0xFFF8FAFF);
+  static const Color surfaceLight = Color(0xFFFFFFFF);
+  static const Color surfaceVariantLight = Color(0xFFF0F4FF);
+  static const Color outlineLight = Color(0xFFBBCCDD);
+  static const Color onSurfaceLight = Color(0xFF1A1C1E);
+  static const Color onSurfaceVariantLight = Color(0xFF44464F);
+  static const Color backgroundDark = Color(0xFF0D1117);
+  static const Color surfaceDark = Color(0xFF161B22);
+  static const Color surfaceVariantDark = Color(0xFF1C2231);
+  static const Color outlineDark = Color(0xFF30363D);
+  static const Color onSurfaceDark = Color(0xFFE6EDF3);
+  static const Color onSurfaceVariantDark = Color(0xFF8B949E);
+  static const Color phiBadge = Color(0xFF7B1FA2);
+  static const Color phiContainer = Color(0xFFF3E5F5);
+}

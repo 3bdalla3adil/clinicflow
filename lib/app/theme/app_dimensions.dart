@@ -1,0 +1,33 @@
+abstract class AppDimensions {
+  static const double spaceXS = 4.0;
+  static const double spaceS = 8.0;
+  static const double spaceM = 12.0;
+  static const double spaceL = 16.0;
+  static const double spaceXL = 20.0;
+  static const double spaceXXL = 24.0;
+  static const double spaceXXXL = 32.0;
+  static const double space48 = 48.0;
+  static const double space64 = 64.0;
+  static const double radiusXS = 4.0;
+  static const double radiusS = 8.0;
+  static const double radiusM = 12.0;
+  static const double radiusL = 16.0;
+  static const double radiusXL = 20.0;
+  static const double radiusXXL = 24.0;
+  static const double radiusRound = 100.0;
+  static const double buttonHeight = 52.0;
+  static const double inputHeight = 56.0;
+  static const double appBarHeight = 64.0;
+  static const double avatarSm = 36.0;
+  static const double avatarMd = 52.0;
+  static const double avatarLg = 80.0;
+  static const double avatarXL = 112.0;
+  static const double iconSm = 16.0;
+  static const double iconMd = 24.0;
+  static const double iconLg = 32.0;
+  static const double iconXL = 48.0;
+  static const double cardElevation = 0.0;
+  static const double bottomNavHeight = 72.0;
+  static const double screenPaddingH = 20.0;
+  static const double screenPaddingV = 24.0;
+}
