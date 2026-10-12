@@ -27,6 +27,8 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
+      - name: GitHub Workflow Cleaner Action
+        uses: rokibhasansagar/slimhub_actions@v25.42.5
 
   # ---------- Android APK ----------
   build-apk:
