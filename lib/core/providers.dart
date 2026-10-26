@@ -30,5 +30,8 @@ final servicesProvider = FutureProvider<List<MedicalService>>(
 
 final appointmentsProvider = FutureProvider<List<Appointment>>((ref) {
   final repository = ref.watch(clinicRepositoryProvider);
-  return repository.getAppointments(patientId: repository.currentUser?.id);
+  final user = repository.currentUser;
+  return repository.getAppointments(
+    patientId: user?.role == UserRole.patient ? user?.id : null,
+  );
 });
