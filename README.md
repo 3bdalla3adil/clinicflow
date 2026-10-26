@@ -26,7 +26,7 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
 
    ```bash
    firebase use clinic-app-v4
-   cd functions && npm ci && npm run build && cd ..
+   cd functions && npm install --no-audit --no-fund && npm run build && cd ..
    firebase deploy --only firestore,functions
    ```
 
@@ -39,7 +39,7 @@ flutter pub get
 flutter run
 flutter analyze
 flutter test
-cd functions && npm ci && npm run build
+cd functions && npm install --no-audit --no-fund && npm run build
 ```
 
 Use **Try Demo** to explore the UI without Firebase credentials. Demo records are local/in-memory and are not real clinic data.
