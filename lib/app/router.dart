@@ -5,6 +5,7 @@ import '../features/home/dashboard_page.dart';
 import '../features/appointments/booking_page.dart';
 import '../features/appointments/appointments_page.dart';
 import '../features/profile/profile_page.dart';
+import '../features/staff/staff_workspace_page.dart';
 
 final routerProvider = Provider<GoRouter>((ref) => GoRouter(
       initialLocation: '/login',
@@ -16,5 +17,6 @@ final routerProvider = Provider<GoRouter>((ref) => GoRouter(
             builder: (_, __) => const AppointmentsPage()),
         GoRoute(path: '/book', builder: (_, __) => const BookingPage()),
         GoRoute(path: '/profile', builder: (_, __) => const ProfilePage()),
+        GoRoute(path: '/staff', builder: (_, __) => const StaffWorkspacePage()),
       ],
     ));
