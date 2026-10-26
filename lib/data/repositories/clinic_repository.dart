@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../models/models.dart';
 import 'demo_data.dart';
@@ -159,28 +160,48 @@ class FirebaseClinicRepository implements ClinicRepository {
       throw StateError('Sign in required.');
     }
 
-    final ref = _collection('appointments').doc();
-    final datePart = '${date.year}'
-        '${date.month.toString().padLeft(2, '0')}'
+    final timeParts = startTime.split(':');
+    if (timeParts.length != 2) {
+      throw ArgumentError.value(startTime, 'startTime', 'Expected HH:mm.');
+    }
+    final startMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
+    final endMinutes = startMinutes + doctor.durationMinutes;
+    if (endMinutes >= 24 * 60) {
+      throw ArgumentError('Appointment duration must finish before midnight.');
+    }
+    String formatMinutes(int value) =>
+        '${(value ~/ 60).toString().padLeft(2, '0')}:'
+        '${(value % 60).toString().padLeft(2, '0')}';
+
+    final datePart = '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
         '${date.day.toString().padLeft(2, '0')}';
-    final appointment = Appointment(
-      id: ref.id,
-      number: 'APT-$datePart-${DateTime.now().millisecondsSinceEpoch}',
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('createAppointment')
+        .call<Map<String, dynamic>>({
+      'clinicId': u.clinicId,
+      'patientId': u.id,
+      'doctorId': doctor.id,
+      'serviceId': service.id,
+      'appointmentDate': datePart,
+      'startTime': startTime,
+      'endTime': formatMinutes(endMinutes),
+    });
+    final id = result.data['appointmentId'] as String?;
+    if (id == null || id.isEmpty) {
+      throw StateError('The booking service did not return an appointment ID.');
+    }
+
+    final dateCompact = datePart.replaceAll('-', '');
+    return Appointment(
+      id: id,
+      number: 'APT-$dateCompact-${id.substring(0, id.length < 6 ? id.length : 6).toUpperCase()}',
       doctor: doctor,
       service: service,
-      date: date,
+      date: DateTime(date.year, date.month, date.day),
       startTime: startTime,
       status: AppointmentStatus.scheduled,
     );
-
-    await ref.set({
-      ...appointment.toMap(),
-      'patientId': u.id,
-      'clinicId': u.clinicId,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    return appointment;
   }
 }
 
