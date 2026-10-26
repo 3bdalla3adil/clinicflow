@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/demo/demo_mode.dart';
@@ -16,6 +17,8 @@ class ClinicFlowApp extends ConsumerWidget {
       theme: clinicTheme(Brightness.light),
       darkTheme: clinicTheme(Brightness.dark),
       themeMode: ThemeMode.system,
+      supportedLocales: const [Locale('en'), Locale('ar')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       routerConfig: ref.watch(routerProvider),
       builder: (context, child) {
         return Column(
