@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/auth/login_page.dart';
+import '../features/auth/guest_start_page.dart';
 import '../features/home/dashboard_page.dart';
 import '../features/appointments/booking_page.dart';
 import '../features/appointments/appointments_page.dart';
@@ -11,6 +12,7 @@ final routerProvider = Provider<GoRouter>((ref) => GoRouter(
       initialLocation: '/login',
       routes: [
         GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
+        GoRoute(path: '/guest', builder: (_, __) => const GuestStartPage()),
         GoRoute(path: '/dashboard', builder: (_, __) => const DashboardPage()),
         GoRoute(
             path: '/appointments',
