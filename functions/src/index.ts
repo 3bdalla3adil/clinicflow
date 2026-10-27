@@ -209,3 +209,77 @@ export const writeAuditLog = onCall(async (request) => {
   });
   return { ok: true };
 });
+
+/** Safe public clinic list for the guest booking entry point. */
+export const listPublicClinics = onCall(async () => {
+  const snapshot = await db.collection('clinics').get();
+  return {
+    clinics: snapshot.docs
+      .filter((doc) => doc.data().active !== false && doc.data().publicBookingEnabled !== false)
+      .map((doc) => ({
+        id: doc.id,
+        name: String(doc.data().name ?? doc.data().clinicName ?? 'Clinic'),
+        city: String(doc.data().city ?? ''),
+      })),
+  };
+});
+
+/** Create the minimum patient profile needed to reserve appointments. */
+export const startGuestProfile = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Continue as guest requires an anonymous Firebase session.');
+  if (request.auth.token.firebase?.sign_in_provider !== 'anonymous') {
+    throw new HttpsError('failed-precondition', 'This action is only for anonymous guest sessions.');
+  }
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const clinic = await db.collection('clinics').doc(clinicId).get();
+  if (!clinic.exists || clinic.data()?.active === false || clinic.data()?.publicBookingEnabled === false) {
+    throw new HttpsError('not-found', 'This clinic is not available for guest booking.');
+  }
+  const userRef = db.collection('users').doc(request.auth.uid);
+  const existing = await userRef.get();
+  if (existing.exists && existing.data()?.clinicId !== clinicId) {
+    throw new HttpsError('failed-precondition', 'This guest session is already linked to another clinic.');
+  }
+  if (!existing.exists) {
+    await userRef.create({
+      name: 'Guest patient',
+      email: '',
+      phone: '',
+      roleId: 'PATIENT',
+      clinicId,
+      isGuest: true,
+      profileComplete: false,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+  return { ok: true, clinicId };
+});
+
+/** Guests can add contact details later without granting themselves a role. */
+export const updateGuestProfile = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const uid = request.auth.uid;
+  const userRef = db.collection('users').doc(uid);
+  const snap = await userRef.get();
+  if (!snap.exists) throw new HttpsError('failed-precondition', 'Start a guest session first.');
+  const user = snap.data()!;
+  if (String(user.roleId ?? user.role ?? '').toUpperCase() !== 'PATIENT') {
+    throw new HttpsError('permission-denied', 'Only patient profiles can use this operation.');
+  }
+  const name = required(request.data?.name, 'name');
+  const phone = String(request.data?.phone ?? '').trim();
+  const email = String(request.data?.email ?? '').trim();
+  if (name.length > 100 || phone.length > 30 || email.length > 254) {
+    throw new HttpsError('invalid-argument', 'One or more profile fields are too long.');
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError('invalid-argument', 'Enter a valid contact email.');
+  }
+  await userRef.update({
+    name, phone, email,
+    profileComplete: phone.length > 0 && email.length > 0,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
+});
