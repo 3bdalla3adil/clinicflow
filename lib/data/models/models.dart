@@ -15,12 +15,16 @@ extension UserRoleX on UserRole {
 enum AppointmentStatus { scheduled, checkedIn, inConsultation, completed, cancelled, noShow }
 
 class AppUser {
-  const AppUser({required this.id, required this.email, required this.name, required this.role, required this.clinicId});
-  final String id, email, name, clinicId;
+  const AppUser({required this.id, required this.email, required this.name, required this.role, required this.clinicId, this.phone = '', this.isGuest = false, this.profileComplete = true});
+  final String id, email, name, clinicId, phone;
   final UserRole role;
+  final bool isGuest, profileComplete;
   factory AppUser.fromMap(String id, Map<String,dynamic> data, {String fallbackEmail=''}) => AppUser(
     id:id, email:(data['email'] as String?) ?? fallbackEmail,
     name:(data['name'] as String?) ?? 'ClinicFlow User',
+    phone:(data['phone'] as String?) ?? '',
+    isGuest:(data['isGuest'] as bool?) ?? false,
+    profileComplete:(data['profileComplete'] as bool?) ?? true,
     role:UserRoleX.fromValue((data['roleId'] ?? data['role']) as String?),
     clinicId:(data['clinicId'] as String?) ?? '',
   );
