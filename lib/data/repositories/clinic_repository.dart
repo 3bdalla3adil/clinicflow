@@ -11,6 +11,7 @@ abstract interface class ClinicRepository {
   Future<void> signIn(String email, String password);
   Future<void> signOut();
   Future<void> signInAsDemoGuest();
+  Future<void> startGuestSession(String clinicId);
   Future<List<Doctor>> getDoctors();
   Future<List<MedicalService>> getServices();
   Future<List<Appointment>> getAppointments({String? patientId});
@@ -56,6 +57,10 @@ class FirebaseClinicRepository implements ClinicRepository {
 
       final doc = await _firestore.collection('users').doc(u.uid).get();
       if (!doc.exists) {
+        if (u.isAnonymous) {
+          yield null;
+          continue;
+        }
         await _auth.signOut();
         throw StateError('Account is not provisioned in ClinicFlow.');
       }
@@ -120,6 +125,28 @@ class FirebaseClinicRepository implements ClinicRepository {
   @override
   Future<void> signInAsDemoGuest() async {
     throw UnsupportedError('Demo guest sign-in is only available in demo mode.');
+  }
+
+  @override
+  Future<void> startGuestSession(String clinicId) async {
+    final credential = await _auth.signInAnonymously();
+    try {
+      await FirebaseFunctions.instance.httpsCallable('startGuestProfile').call({
+        'clinicId': clinicId,
+      });
+      final user = credential.user;
+      if (user == null) throw StateError('Guest authentication failed.');
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      final data = doc.data();
+      if (!doc.exists || data == null) {
+        throw StateError('Guest profile could not be initialized.');
+      }
+      _currentUser = AppUser.fromMap(user.uid, data, fallbackEmail: '');
+      _clinicId = clinicId;
+    } catch (_) {
+      await _auth.signOut();
+      rethrow;
+    }
   }
 
   @override
@@ -246,6 +273,11 @@ class DemoClinicRepository implements ClinicRepository {
     _appointments
       ..clear()
       ..addAll(DemoData.appointments());
+  }
+
+  @override
+  Future<void> startGuestSession(String clinicId) async {
+    throw UnsupportedError('Choose Try Demo for the offline sample environment.');
   }
 
   @override
