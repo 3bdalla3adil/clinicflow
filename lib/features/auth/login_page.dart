@@ -192,6 +192,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       ),
                     ),
                     const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _loading ? null : () => context.push('/guest'),
+                      icon: const Icon(Icons.person_outline),
+                      label: const Text('Continue as guest'),
+                    ),
+                    const SizedBox(height: 12),
                     const Divider(),
                     const SizedBox(height: 12),
                     SizedBox(
