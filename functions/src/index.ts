@@ -278,7 +278,7 @@ export const updateGuestProfile = onCall(async (request) => {
   }
   await userRef.update({
     name, phone, email,
-    profileComplete: phone.length > 0 && email.length > 0,
+    profileComplete: phone.length > 0 || email.length > 0,
     updatedAt: FieldValue.serverTimestamp(),
   });
   return { ok: true };
