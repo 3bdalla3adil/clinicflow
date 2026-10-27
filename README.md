@@ -6,6 +6,7 @@ ClinicFlow is a Flutter + Firebase clinic-management MVP for Android and iOS. It
 
 - Firebase email/password sign-in and isolated local demo mode.
 - Patient appointment booking and appointment history.
+- Anonymous guest entry with clinic selection; guests can book first and add their name/contact details later from My Profile.
 - Role-aware dashboard and staff appointment workspace.
 - Reception check-in, doctor consultation workflow and clinical notes, and payment recording.
 - Server-side role and clinic validation for booking, appointment status changes, consultations, payments, and audit events.
@@ -20,7 +21,7 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
 1. Install Flutter, Node.js 20, and the Firebase CLI.
 2. Configure the existing Firebase project `clinic-app-v4` with FlutterFire CLI. Generate `lib/firebase_options.dart` locally if the project setup uses generated FlutterFire options; do not commit private service-account credentials.
 3. Enable Email/Password Authentication and Firestore.
-4. Provision each user's Firebase Authentication identity and matching `users/{uid}` profile using a trusted administrative process. Do not let clients choose their own role or clinic.
+4. Enable **Anonymous** as well as Email/Password Authentication. Provision staff and registered users' `users/{uid}` profiles using a trusted administrative process. Guest patient profiles are created by the callable function. Do not let clients choose their own role or clinic.
 5. Seed each clinic with doctor and service documents.
 6. Deploy Firestore rules, indexes, and callable functions from the repository root:
 
@@ -30,7 +31,7 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
    firebase deploy --only firestore,functions
    ```
 
-The callable booking function validates clinic scope and profile ownership and reserves a slot in a Firestore transaction. Clients should not be granted direct write access to appointments, slot locks, consultations, payments, or audit logs.
+The guest flow lists available clinics, creates a Firebase anonymous session, and provisions a minimum patient profile on the server. Guests can book before completing their contact details; the session remains anonymous until an account-linking flow is added. Enable Anonymous Authentication in Firebase Console. The callable booking function validates clinic scope and profile ownership and reserves a slot in a Firestore transaction. Clients should not be granted direct write access to appointments, slot locks, consultations, payments, or audit logs.
 
 ## Run and test
 
