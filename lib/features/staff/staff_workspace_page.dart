@@ -91,6 +91,11 @@ class StaffWorkspacePage extends ConsumerWidget {
       diagnosis.dispose();
       return;
     }
+    if (!context.mounted) {
+      notes.dispose();
+      diagnosis.dispose();
+      return;
+    }
     await _call(context, ref, 'saveConsultation', {
       'clinicId': user.clinicId,
       'appointmentId': appointment.id,
@@ -124,7 +129,7 @@ class StaffWorkspacePage extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: method,
+                initialValue: method,
                 decoration: const InputDecoration(labelText: 'Payment method'),
                 items: const [
                   DropdownMenuItem(value: 'cash', child: Text('Cash')),
@@ -143,6 +148,10 @@ class StaffWorkspacePage extends ConsumerWidget {
         ),
       ),
     );
+    if (!context.mounted) {
+      amount.dispose();
+      return;
+    }
     if (paid == true) {
       final parsed = double.tryParse(amount.text.trim());
       if (parsed == null || parsed <= 0) {
