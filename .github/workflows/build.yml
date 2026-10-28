@@ -145,7 +145,16 @@ jobs:
           apk="build/app/outputs/flutter-apk/app-release.apk"
           test -s "$apk"
           unzip -t "$apk"
-          app_id="$(apkanalyzer manifest application-id "$apk")"
+          apkanalyzer_bin="$(command -v apkanalyzer || true)"
+          if [ -z "$apkanalyzer_bin" ]; then
+            sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            apkanalyzer_bin="$(find "$sdk_root/cmdline-tools" -type f -name apkanalyzer -print -quit 2>/dev/null || true)"
+          fi
+          test -n "$apkanalyzer_bin" || {
+            echo "::error::Android SDK apkanalyzer was not found; cannot verify the APK application ID."
+            exit 1
+          }
+          app_id="$("$apkanalyzer_bin" manifest application-id "$apk")"
           test "$app_id" = "$ANDROID_APP_ID" || {
             echo "::error::Expected Android application ID $ANDROID_APP_ID, got $app_id"
             exit 1
