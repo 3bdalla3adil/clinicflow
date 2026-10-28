@@ -145,7 +145,12 @@ jobs:
           apk="build/app/outputs/flutter-apk/app-release.apk"
           test -s "$apk"
           unzip -t "$apk"
-          echo "APK archive verified."
+          app_id="$(apkanalyzer manifest application-id "$apk")"
+          test "$app_id" = "$ANDROID_APP_ID" || {
+            echo "::error::Expected Android application ID $ANDROID_APP_ID, got $app_id"
+            exit 1
+          }
+          echo "Verified APK archive and application ID: $app_id"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -175,6 +180,23 @@ jobs:
           if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             flutter create --platforms=ios --org "${ORG}" --project-name "${APP}" .
           fi
+
+      - name: Enforce existing iOS bundle identifier
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          if not project.exists():
+              raise SystemExit("iOS Xcode project was not generated")
+          source = project.read_text()
+          updated, count = re.subn(r"PRODUCT_BUNDLE_IDENTIFIER = [^;]+;", "PRODUCT_BUNDLE_IDENTIFIER = com.medibook.medibook;", source)
+          if count == 0:
+              raise SystemExit("Could not find PRODUCT_BUNDLE_IDENTIFIER settings in Xcode project")
+          project.write_text(updated)
+          print(f"Aligned {count} Xcode build setting(s) with com.medibook.medibook")
+          PY
 
       - name: Configure and validate Firebase for iOS
         env:
