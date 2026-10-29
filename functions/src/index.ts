@@ -28,6 +28,32 @@ function required(value: unknown, name: string): string {
   return value.trim();
 }
 
+function timeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function isValidCalendarDate(value: string): boolean {
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function isAssignedDoctor(actorUid: string, doctorId: string, doctorData: FirebaseFirestore.DocumentData): boolean {
+  return actorUid === doctorId ||
+    [doctorData.userId, doctorData.uid, doctorData.authUid, doctorData.userUid]
+      .some((value) => typeof value === 'string' && value === actorUid);
+}
+
+function assertAssignedDoctor(actor: { role: StaffRole; clinicId: string }, actorUid: string,
+                              appointmentData: FirebaseFirestore.DocumentData,
+                              doctorData: FirebaseFirestore.DocumentData | undefined): void {
+  if (actor.role === 'DOCTOR' &&
+      (!doctorData || !isAssignedDoctor(actorUid, String(appointmentData.doctorId ?? ''), doctorData))) {
+    throw new HttpsError('permission-denied', 'Doctors can only access appointments assigned to them.');
+  }
+}
+
 /** All bookings go through this transaction; clients cannot self-assign a clinic or patient. */
 export const createAppointment = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
@@ -45,10 +71,12 @@ export const createAppointment = onCall(async (request) => {
     throw new HttpsError('permission-denied', 'Patients can only book for themselves.');
   }
   requireRole(actor.role, ['ADMIN', 'RECEPTION', 'PATIENT']);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) ||
-      !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
-      !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) || endTime <= startTime) {
-    throw new HttpsError('invalid-argument', 'Date or appointment time is invalid.');
+  if (!isValidCalendarDate(appointmentDate) ||
+      !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(startTime) ||
+      !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(endTime) ||
+      timeToMinutes(endTime) <= timeToMinutes(startTime) ||
+      timeToMinutes(endTime) - timeToMinutes(startTime) > 480) {
+    throw new HttpsError('invalid-argument', 'Date or appointment time is invalid (maximum duration is 8 hours).');
   }
 
   const clinic = db.collection('clinics').doc(clinicId);
@@ -57,24 +85,54 @@ export const createAppointment = onCall(async (request) => {
   const appointments = clinic.collection('appointments');
   const appointmentRef = appointments.doc();
   const slotKey = `${doctorId}_${appointmentDate}_${startTime.replace(':', '')}`;
-  const slotRef = clinic.collection('appointment_slots').doc(slotKey);
   const userRef = db.collection('users').doc(patientId);
+  const startMinute = timeToMinutes(startTime);
+  const endMinute = timeToMinutes(endTime);
+  // One lock per minute prevents concurrent bookings with different but overlapping start times.
+  const slotRefs = Array.from({ length: endMinute - startMinute }, (_, offset) => {
+    const minute = startMinute + offset;
+    const minuteKey = `${String(Math.floor(minute / 60)).padStart(2, '0')}${String(minute % 60).padStart(2, '0')}`;
+    return clinic.collection('appointment_slots').doc(`${doctorId}_${appointmentDate}_${minuteKey}`);
+  });
 
   await db.runTransaction(async (tx) => {
-    const [doctorSnap, serviceSnap, patientSnap, slotSnap] = await Promise.all([
-      tx.get(doctorRef), tx.get(serviceRef), tx.get(userRef), tx.get(slotRef),
+    const [doctorSnap, serviceSnap, patientSnap, existingAppointments, ...slotSnaps] = await Promise.all([
+      tx.get(doctorRef), tx.get(serviceRef), tx.get(userRef),
+      tx.get(appointments.where('doctorId', '==', doctorId).where('appointmentDate', '==', appointmentDate)),
+      ...slotRefs.map((ref) => tx.get(ref)),
     ]);
     if (!doctorSnap.exists) throw new HttpsError('not-found', 'Doctor was not found in this clinic.');
     if (!serviceSnap.exists) throw new HttpsError('not-found', 'Service was not found in this clinic.');
     if (!patientSnap.exists) throw new HttpsError('not-found', 'Patient profile was not found.');
-    if (slotSnap.exists) {
-      const previousId = String(slotSnap.data()?.appointmentId ?? '');
-      const previous = previousId ? await tx.get(appointments.doc(previousId)) : null;
-      const previousStatus = String(previous?.data()?.status ?? '');
-      if (previous?.exists && !['cancelled', 'completed', 'noShow'].includes(previousStatus)) {
+
+    const activeStatuses = new Set(['scheduled', 'checkedIn', 'inConsultation']);
+    for (const existing of existingAppointments.docs) {
+      const data = existing.data();
+      if (!activeStatuses.has(String(data.status ?? 'scheduled'))) continue;
+      const existingStart = typeof data.startTime === 'string' ? timeToMinutes(data.startTime) : -1;
+      const existingEnd = typeof data.endTime === 'string' ? timeToMinutes(data.endTime) : -1;
+      if (existingStart >= 0 && existingEnd > existingStart &&
+          startMinute < existingEnd && existingStart < endMinute) {
+        throw new HttpsError('already-exists', 'That appointment overlaps an existing booking.');
+      }
+    }
+
+    const occupiedAppointmentIds = [...new Set(slotSnaps
+      .filter((snap) => snap.exists)
+      .map((snap) => String(snap.data()?.appointmentId ?? ''))
+      .filter((id) => id.length > 0))];
+    const occupiedSnapshots = await Promise.all(occupiedAppointmentIds.map((id) => tx.get(appointments.doc(id))));
+    const statusById = new Map(occupiedSnapshots.map((snap) => [
+      snap.id, snap.exists ? String(snap.data()?.status ?? 'scheduled') : 'missing',
+    ]));
+    for (const snap of slotSnaps) {
+      if (!snap.exists) continue;
+      const previousId = String(snap.data()?.appointmentId ?? '');
+      if (previousId && activeStatuses.has(statusById.get(previousId) ?? 'scheduled')) {
         throw new HttpsError('already-exists', 'That appointment time is no longer available.');
       }
     }
+
     const doctor = doctorSnap.data()!;
     const service = serviceSnap.data()!;
     const date = new Date(`${appointmentDate}T00:00:00.000Z`);
@@ -86,7 +144,9 @@ export const createAppointment = onCall(async (request) => {
       status: 'scheduled', source: 'mobile', createdBy: request.auth!.uid,
       createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
     });
-    tx.set(slotRef, { appointmentId: appointmentRef.id, appointmentDate, startTime, doctorId, updatedAt: FieldValue.serverTimestamp() });
+    for (const slotRef of slotRefs) {
+      tx.set(slotRef, { appointmentId: appointmentRef.id, appointmentDate, startTime, endTime, doctorId, updatedAt: FieldValue.serverTimestamp() });
+    }
     tx.set(clinic.collection('audit_logs').doc(), {
       clinicId, entityType: 'appointment', entityId: appointmentRef.id, action: 'created',
       actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
@@ -121,7 +181,13 @@ export const updateAppointmentStatus = onCall(async (request) => {
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) throw new HttpsError('not-found', 'Appointment not found.');
-    const current = String(snap.data()?.status ?? 'scheduled');
+    const appointmentData = snap.data()!;
+    if (actor.role === 'DOCTOR') {
+      const assignedDoctorId = String(appointmentData.doctorId ?? '');
+      const doctorSnap = assignedDoctorId ? await tx.get(db.collection('clinics').doc(clinicId).collection('doctors').doc(assignedDoctorId)) : null;
+      assertAssignedDoctor(actor, request.auth!.uid, appointmentData, doctorSnap?.exists ? doctorSnap.data() : undefined);
+    }
+    const current = String(appointmentData.status ?? 'scheduled');
     if (!TRANSITIONS[current]?.includes(nextStatus)) {
       throw new HttpsError('failed-precondition', `Cannot move an appointment from ${current} to ${nextStatus}.`);
     }
@@ -138,7 +204,7 @@ export const updateAppointmentStatus = onCall(async (request) => {
 export const saveConsultation = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
   const actor = await getActor(request.auth.uid);
-  requireRole(actor.role, ['ADMIN', 'DOCTOR']);
+  requireRole(actor.role, ['DOCTOR']);
   const clinicId = required(request.data?.clinicId, 'clinicId');
   const appointmentId = required(request.data?.appointmentId, 'appointmentId');
   const notes = required(request.data?.notes, 'notes');
@@ -149,11 +215,15 @@ export const saveConsultation = onCall(async (request) => {
   await db.runTransaction(async (tx) => {
     const appointment = await tx.get(appointmentRef);
     if (!appointment.exists) throw new HttpsError('not-found', 'Appointment not found.');
-    if (!['checkedIn', 'inConsultation'].includes(String(appointment.data()?.status))) {
+    const appointmentData = appointment.data()!;
+    const assignedDoctorId = String(appointmentData.doctorId ?? '');
+    const doctorSnap = await tx.get(clinic.collection('doctors').doc(assignedDoctorId));
+    assertAssignedDoctor(actor, request.auth!.uid, appointmentData, doctorSnap.exists ? doctorSnap.data() : undefined);
+    if (!['checkedIn', 'inConsultation'].includes(String(appointmentData.status))) {
       throw new HttpsError('failed-precondition', 'The patient must be checked in before a consultation is recorded.');
     }
     tx.set(consultationRef, {
-      clinicId, appointmentId, patientId: appointment.data()?.patientId,
+      clinicId, appointmentId, patientId: appointmentData.patientId,
       doctorId: request.auth!.uid, notes, diagnosis: String(request.data?.diagnosis ?? ''),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -195,20 +265,7 @@ export const recordPayment = onCall(async (request) => {
   return { paymentId: paymentRef.id };
 });
 
-export const writeAuditLog = onCall(async (request) => {
-  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
-  const actor = await getActor(request.auth.uid);
-  const clinicId = required(request.data?.clinicId, 'clinicId');
-  const entityType = required(request.data?.entityType, 'entityType');
-  const entityId = required(request.data?.entityId, 'entityId');
-  const action = required(request.data?.action, 'action');
-  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
-  await db.collection('clinics').doc(clinicId).collection('audit_logs').add({
-    clinicId, entityType, entityId, action, actorId: request.auth.uid,
-    timestamp: FieldValue.serverTimestamp(),
-  });
-  return { ok: true };
-});
+// Audit entries are written only by trusted business operations in this module.
 
 /** Safe public clinic list for the guest booking entry point. */
 export const listPublicClinics = onCall(async () => {
