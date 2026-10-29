@@ -104,6 +104,11 @@ export const createAppointment = onCall(async (request) => {
     if (!doctorSnap.exists) throw new HttpsError('not-found', 'Doctor was not found in this clinic.');
     if (!serviceSnap.exists) throw new HttpsError('not-found', 'Service was not found in this clinic.');
     if (!patientSnap.exists) throw new HttpsError('not-found', 'Patient profile was not found.');
+    const patientData = patientSnap.data()!;
+    if (String(patientData.clinicId ?? '') !== clinicId ||
+        String(patientData.roleId ?? patientData.role ?? '').toUpperCase() !== 'PATIENT') {
+      throw new HttpsError('permission-denied', 'The selected patient is not registered with this clinic.');
+    }
 
     const activeStatuses = new Set(['scheduled', 'checkedIn', 'inConsultation']);
     for (const existing of existingAppointments.docs) {
