@@ -24,7 +24,12 @@ service cloud.firestore {
       return hasRole('DOCTOR') && (
         doctorId == request.auth.uid ||
         (exists(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)) &&
-          get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userId', '') == request.auth.uid)
+          (
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userId', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('uid', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('authUid', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userUid', '') == request.auth.uid
+          ))
       );
     }
 
