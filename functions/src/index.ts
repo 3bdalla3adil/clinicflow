@@ -270,7 +270,11 @@ export const recordPayment = onCall(async (request) => {
   return { paymentId: paymentRef.id };
 });
 
-// Audit entries are written only by trusted business operations in this module.
+// Legacy compatibility endpoint: clients cannot create audit records.
+export const writeAuditLog = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  throw new HttpsError('permission-denied', 'Audit records are created only by trusted server-side operations.');
+});
 
 /** Safe public clinic list for the guest booking entry point. */
 export const listPublicClinics = onCall(async () => {
