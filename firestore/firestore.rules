@@ -20,6 +20,14 @@ service cloud.firestore {
       return signedIn() && userData().clinicId == clinicId;
     }
 
+    function isAssignedDoctor(clinicId, doctorId) {
+      return hasRole('DOCTOR') && (
+        doctorId == request.auth.uid ||
+        (exists(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)) &&
+          get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userId', '') == request.auth.uid)
+      );
+    }
+
     match /users/{uid} {
       allow read: if signedIn() && request.auth.uid == uid;
       // Provisioning and role/clinic assignment must happen in trusted server code.
@@ -45,8 +53,9 @@ service cloud.firestore {
 
       match /appointments/{appointmentId} {
         allow read: if belongsToClinic(clinicId) &&
-          (hasRole('ADMIN') || hasRole('RECEPTION') || hasRole('DOCTOR') ||
-           resource.data.patientId == request.auth.uid);
+          (hasRole('ADMIN') || hasRole('RECEPTION') ||
+           (hasRole('DOCTOR') && isAssignedDoctor(clinicId, resource.data.doctorId)) ||
+           (hasRole('PATIENT') && resource.data.patientId == request.auth.uid));
         // Appointment creation and state transitions are callable-function-only.
         allow create, update, delete: if false;
       }
@@ -56,8 +65,9 @@ service cloud.firestore {
       }
 
       match /patients/{patientId} {
+        // Doctors must use assigned appointment/consultation access; no clinic-wide patient directory.
         allow read: if belongsToClinic(clinicId) &&
-          (hasRole('ADMIN') || hasRole('RECEPTION') || hasRole('DOCTOR') ||
+          (hasRole('ADMIN') || hasRole('RECEPTION') ||
            (hasRole('PATIENT') && patientId == request.auth.uid));
         allow create, update: if belongsToClinic(clinicId) &&
           (hasRole('ADMIN') || hasRole('RECEPTION'));
@@ -66,8 +76,8 @@ service cloud.firestore {
 
       match /consultations/{consultationId} {
         allow read: if belongsToClinic(clinicId) &&
-          (hasRole('ADMIN') || hasRole('DOCTOR') ||
-           (hasRole('RECEPTION') && false));
+          (hasRole('ADMIN') ||
+           (hasRole('DOCTOR') && resource.data.doctorId == request.auth.uid));
         allow write: if false;
       }
 
