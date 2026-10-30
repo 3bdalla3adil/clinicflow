@@ -120,7 +120,7 @@ class FirebaseClinicRepository implements ClinicRepository {
   @override
   Future<void> sendPasswordReset(String email) async {
     final normalized = email.trim().toLowerCase();
-    if (normalized.isEmpty || !RegExp(r'^[^\\s@]+@[^\\s@]+\\.[^\\s@]+
+    if (normalized.isEmpty || !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+
     _currentUser = null;
     _clinicId = null;
     await _auth.signOut();
@@ -339,7 +339,7 @@ class DemoClinicRepository implements ClinicRepository {
       throw StateError('Sign in as a guest before linking an account.');
     }
     final normalized = email.trim().toLowerCase();
-    if (normalized.isEmpty || !RegExp(r'^[^\\s@]+@[^\\s@]+\\.[^\\s@]+
+    if (normalized.isEmpty || !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+
     _currentUser = null;
     _clinicId = null;
     await _auth.signOut();
