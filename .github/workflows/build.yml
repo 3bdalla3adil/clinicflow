@@ -1,4 +1,4 @@
-name: Build MediBook (ClinicFlow repository)
+name: ClinicFlow Release Builds
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
           - both
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: medibook-release-${{ github.ref }}-${{ inputs.platform }}
@@ -294,6 +294,8 @@ jobs:
 
   prerelease-apk:
     name: Publish Android APK prerelease
+    permissions:
+      contents: write
     needs: android
     if: always() && (inputs.platform == 'android' || inputs.platform == 'both') && needs.android.result == 'success'
     runs-on: ubuntu-latest
@@ -317,6 +319,8 @@ jobs:
 
   prerelease-ipa:
     name: Publish iOS IPA prerelease
+    permissions:
+      contents: write
     needs: ios
     if: always() && (inputs.platform == 'ios' || inputs.platform == 'both') && needs.ios.result == 'success'
     runs-on: ubuntu-latest
