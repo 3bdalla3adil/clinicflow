@@ -31,7 +31,7 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
    firebase deploy --only firestore,functions
    ```
 
-The guest flow lists available clinics, creates a Firebase anonymous session, and provisions a minimum patient profile on the server. Guests can book before completing their contact details; the session remains anonymous until an account-linking flow is added. Enable Anonymous Authentication in Firebase Console. The callable booking function validates clinic scope and profile ownership and reserves a slot in a Firestore transaction. Clients should not be granted direct write access to appointments, slot locks, consultations, payments, or audit logs.
+The guest flow lists available clinics, creates a Firebase anonymous session, and provisions a minimum patient profile on the server. Guests can book before completing their contact details. From My Profile, they can link an email/password credential to preserve the same Firebase UID and patient history. Password reset is available from the sign-in screen. Enable Anonymous Authentication in Firebase Console. The callable booking function validates clinic scope and profile ownership and reserves a slot in a Firestore transaction. Clients should not be granted direct write access to appointments, slot locks, consultations, payments, or audit logs.
 
 ## Run and test
 
@@ -51,4 +51,4 @@ The `.github/workflows/clinicflow.yml` workflow runs analysis, tests, and a Clou
 
 ## Production-readiness checklist
 
-Before handling real patient information, complete staff invitation/provisioning and account recovery, patient registration and Google sign-in if required, FCM notification delivery, pagination, Arabic UI translations and RTL verification, server-enforced doctor assignment, payment reconciliation/refunds, privacy/retention policies, monitoring, backups, threat modeling, and independent security/clinical/legal review. Do not use the public demo identities or demo data for real patient records.
+Before handling real patient information, complete the remaining MediBook parity modules and every release gate in [the migration plan](docs/medibook-feature-parity.md): secure staff invitation/provisioning, patient and clinic administration, doctor schedules, triage/queue, medical records, prescriptions, telehealth, notifications, payment history/reconciliation/refunds, full Arabic/RTL, pagination, monitoring, backups, and independent security/clinical/legal review. Existing appointment, consultation-note, and payment-recording workflows are only a starting subset—not full billing or clinical-record management. Do not use the public demo identities or demo data for real patient records.
