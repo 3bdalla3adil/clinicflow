@@ -18,6 +18,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
+  final _accountEmail = TextEditingController();
+  final _accountPassword = TextEditingController();
   String? _loadedUserId;
   bool _saving = false;
   String? _error;
@@ -27,6 +29,8 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     _name.dispose();
     _email.dispose();
     _phone.dispose();
+    _accountEmail.dispose();
+    _accountPassword.dispose();
     super.dispose();
   }
 
@@ -36,6 +40,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     _name.text = user.name == 'Guest patient' ? '' : user.name;
     _email.text = user.email;
     _phone.text = user.phone;
+    _accountEmail.text = user.email;
   }
 
   Future<void> _save(AppUser user) async {
@@ -61,6 +66,30 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = 'Unable to save your profile: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _linkAccount() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await ref.read(clinicRepositoryProvider).linkGuestAccount(
+        _accountEmail.text,
+        _accountPassword.text,
+      );
+      _accountPassword.clear();
+      ref.invalidate(currentUserProvider);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Your guest account is now linked. You can sign in with your email and password.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -151,6 +180,30 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           if (_error != null) ...[
             const SizedBox(height: 12),
             Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ],
+          if (user.isGuest && !ref.watch(demoModeProvider)) ...[
+            const SizedBox(height: 24),
+            Text('Secure your guest account', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            const Text('Create a password to keep access to your appointments if you change or lose this device.'),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _accountEmail,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Sign-in email'),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _accountPassword,
+              obscureText: true,
+              autofillHints: const [AutofillHints.newPassword],
+              decoration: const InputDecoration(labelText: 'Create password (8+ characters)'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              onPressed: _saving ? null : _linkAccount,
+              child: const Text('Link email and password'),
+            ),
           ],
           if (canEdit) ...[
             const SizedBox(height: 20),
