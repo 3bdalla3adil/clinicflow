@@ -120,10 +120,67 @@ class FirebaseClinicRepository implements ClinicRepository {
   @override
   Future<void> sendPasswordReset(String email) async {
     final normalized = email.trim().toLowerCase();
-    if (normalized.isEmpty || !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+
-    _currentUser = null;
-    _clinicId = null;
-    await _auth.signOut();
+    if (normalized.isEmpty ||
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
+      throw ArgumentError('Enter a valid email address.');
+    }
+    await _auth.sendPasswordResetEmail(email: normalized);
+  }
+
+  @override
+  Future<void> linkGuestAccount(String email, String password) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty ||
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
+      throw ArgumentError('Enter a valid email address.');
+    }
+    if (password.length < 8) {
+      throw ArgumentError('Password must be at least 8 characters.');
+    }
+
+    var user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Your guest session has expired. Sign in again.');
+    }
+
+    final hasPasswordProvider =
+        user.providerData.any((provider) => provider.providerId == 'password');
+    if (user.isAnonymous) {
+      final credential = EmailAuthProvider.credential(
+        email: normalized,
+        password: password,
+      );
+      final linked = await user.linkWithCredential(credential);
+      user = linked.user;
+      if (user == null) {
+        throw StateError('Firebase did not return the linked account.');
+      }
+    } else if (!hasPasswordProvider ||
+        (user.email ?? '').trim().toLowerCase() != normalized) {
+      throw StateError(
+        'This session is already linked to a different sign-in method or email.',
+      );
+    }
+
+    // Finalization is intentionally safe to retry. If the Auth link succeeds
+    // but the callable request fails, a second attempt resumes from this point
+    // rather than trying to link the credential a second time.
+    await user.getIdToken(true);
+    await FirebaseFunctions.instance
+        .httpsCallable('finalizeGuestAccountLink')
+        .call();
+
+    final profile = await _firestore.collection('users').doc(user.uid).get();
+    final data = profile.data();
+    if (!profile.exists || data == null) {
+      throw StateError('The linked account profile could not be loaded.');
+    }
+    _currentUser = AppUser.fromMap(
+      user.uid,
+      data,
+      fallbackEmail: user.email ?? normalized,
+    );
+    _clinicId = _currentUser!.clinicId;
   }
 
   @override
