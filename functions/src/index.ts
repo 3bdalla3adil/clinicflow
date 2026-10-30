@@ -349,3 +349,39 @@ export const updateGuestProfile = onCall(async (request) => {
   });
   return { ok: true };
 });
+
+
+/** Converts an anonymous patient session into a permanent email/password account. */
+export const finalizeGuestAccountLink = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const provider = String(request.auth.token.firebase?.sign_in_provider ?? '');
+  const email = String(request.auth.token.email ?? '').trim().toLowerCase();
+  if (provider !== 'password' || !email) {
+    throw new HttpsError('failed-precondition', 'Link an email/password credential before completing account setup.');
+  }
+  const userRef = db.collection('users').doc(request.auth.uid);
+  await db.runTransaction(async (tx) => {
+    const userSnap = await tx.get(userRef);
+    if (!userSnap.exists) throw new HttpsError('failed-precondition', 'A guest profile is required.');
+    const user = userSnap.data()!;
+    if (String(user.roleId ?? user.role ?? '').toUpperCase() !== 'PATIENT') {
+      throw new HttpsError('permission-denied', 'Only patient guest accounts can be linked.');
+    }
+    const existingEmail = String(user.email ?? '').trim().toLowerCase();
+    if (existingEmail && existingEmail !== email) {
+      throw new HttpsError('failed-precondition', 'The account email does not match the linked sign-in email.');
+    }
+    tx.update(userRef, {
+      email,
+      isGuest: false,
+      profileComplete: String(user.name ?? '').trim().length > 0 && String(user.phone ?? '').trim().length > 0,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(db.collection('clinics').doc(String(user.clinicId)).collection('audit_logs').doc(), {
+      clinicId: String(user.clinicId), entityType: 'patient', entityId: request.auth!.uid,
+      action: 'guest_account_linked', actorId: request.auth!.uid,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true };
+});
