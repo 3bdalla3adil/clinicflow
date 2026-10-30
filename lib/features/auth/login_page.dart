@@ -55,7 +55,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   Future<void> _resetPassword() async {
     final email = _emailController.text.trim();
-    if (email.isEmpty || !RegExp(r'^[^\\s@]+@[^\\s@]+\\.[^\\s@]+
+    if (email.isEmpty || !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+
     setState(() {
       _loading = true;
       _error = null;
