@@ -121,7 +121,7 @@ class FirebaseClinicRepository implements ClinicRepository {
   Future<void> sendPasswordReset(String email) async {
     final normalized = email.trim().toLowerCase();
     if (normalized.isEmpty ||
-        !RegExp(r'^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$').hasMatch(normalized)) {
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
       throw ArgumentError('Enter a valid email address.');
     }
     await _auth.sendPasswordResetEmail(email: normalized);
@@ -131,7 +131,7 @@ class FirebaseClinicRepository implements ClinicRepository {
   Future<void> linkGuestAccount(String email, String password) async {
     final normalized = email.trim().toLowerCase();
     if (normalized.isEmpty ||
-        !RegExp(r'^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$').hasMatch(normalized)) {
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
       throw ArgumentError('Enter a valid email address.');
     }
     if (password.length < 8) {
