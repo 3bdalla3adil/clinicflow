@@ -367,10 +367,7 @@ export const finalizeGuestAccountLink = onCall(async (request) => {
     if (String(user.roleId ?? user.role ?? '').toUpperCase() !== 'PATIENT') {
       throw new HttpsError('permission-denied', 'Only patient guest accounts can be linked.');
     }
-    const existingEmail = String(user.email ?? '').trim().toLowerCase();
-    if (existingEmail && existingEmail !== email) {
-      throw new HttpsError('failed-precondition', 'The account email does not match the linked sign-in email.');
-    }
+    // The guest email field may be a contact address; the linked Auth email becomes canonical.
     tx.update(userRef, {
       email,
       isGuest: false,
