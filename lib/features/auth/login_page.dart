@@ -248,7 +248,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           ? 'Password is required'
                           : null,
                       onFieldSubmitted: (_) {
-                        if (!_loading) _signIn();
+                        if (!_loading && firebaseAvailable) _signIn();
                       },
                     ),
                     Align(
