@@ -106,3 +106,17 @@ test('reception can read clinic appointments but cannot write audit records', as
   await assertSucceeds(read(db, 'clinics/clinic-a/appointments/assigned-1'));
   await assertFails(setDoc(doc(db, 'clinics/clinic-a/audit_logs/forged-by-reception'), { action: 'fake' }));
 });
+
+
+test('even clinic admins cannot bypass audited catalog callables', async () => {
+  const db = signedIn('admin-1');
+  await assertFails(setDoc(doc(db, 'clinics/clinic-a/doctors/new-doctor'), {
+    name: 'New Doctor', specialty: 'General', durationMinutes: 30,
+  }));
+  await assertFails(setDoc(doc(db, 'clinics/clinic-a/services/new-service'), {
+    name: 'Consultation', price: 100,
+  }));
+  await assertFails(updateDoc(doc(db, 'clinics/clinic-a/doctors/doc-1'), {
+    specialty: 'Cardiology',
+  }));
+});
