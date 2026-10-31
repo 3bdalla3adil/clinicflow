@@ -25,12 +25,15 @@ final routerProvider = Provider<GoRouter>((ref) {
       // resolving the profile document after sign-in / guest provisioning.
       if (session.isLoading) return null;
 
-      final isPublicRoute = state.matchedLocation == '/login' ||
-          state.matchedLocation == '/guest';
+      final location = state.matchedLocation;
+      final isAuthEntryRoute = location == '/login' || location == '/guest';
+      // Settings is also intentionally reachable from the signed-out screen.
+      final isAllowedWhileSignedOut =
+          isAuthEntryRoute || location == '/settings';
       final user = session.valueOrNull;
 
-      if (user == null && !isPublicRoute) return '/login';
-      if (user != null && isPublicRoute) {
+      if (user == null && !isAllowedWhileSignedOut) return '/login';
+      if (user != null && isAuthEntryRoute) {
         return '/dashboard';
       }
       return null;
