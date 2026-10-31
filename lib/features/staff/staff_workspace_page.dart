@@ -1,4 +1,5 @@
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -161,9 +162,11 @@ class StaffWorkspacePage extends ConsumerWidget {
           );
         }
       } else {
+        final paymentId = FirebaseFirestore.instance.collection('_paymentRequests').doc().id;
         await _call(context, ref, 'recordPayment', {
           'clinicId': user.clinicId,
           'appointmentId': appointment.id,
+          'paymentId': paymentId,
           'amount': parsed,
           'method': method,
         });
