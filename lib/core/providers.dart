@@ -10,7 +10,9 @@ final demoModeProvider = StateProvider<bool>((ref) => false);
 final firebaseAvailableProvider = Provider<bool>((_) => Firebase.apps.isNotEmpty);
 
 final clinicRepositoryProvider = Provider<ClinicRepository>((ref) {
-  if (ref.watch(demoModeProvider)) {
+  // A missing native Firebase configuration must not cause FirebaseAuth.instance
+  // to throw while the login screen is being built. Offline demo remains usable.
+  if (ref.watch(demoModeProvider) || !ref.watch(firebaseAvailableProvider)) {
     return DemoClinicRepository();
   }
   return FirebaseClinicRepository();
