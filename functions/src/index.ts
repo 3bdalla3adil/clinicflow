@@ -248,15 +248,23 @@ export const recordPayment = onCall(async (request) => {
   const appointmentId = required(request.data?.appointmentId, 'appointmentId');
   const amount = Number(request.data?.amount);
   const method = required(request.data?.method, 'method');
+  const paymentId = required(request.data?.paymentId, 'paymentId');
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(paymentId)) throw new HttpsError('invalid-argument', 'Payment request ID is invalid.');
   if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
-  if (!Number.isFinite(amount) || amount <= 0) throw new HttpsError('invalid-argument', 'Payment amount must be positive.');
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000 || Math.round(amount * 100) !== amount * 100) throw new HttpsError('invalid-argument', 'Payment amount must be positive and limited to two decimal places.');
   if (!['cash', 'card', 'insurance', 'transfer'].includes(method)) throw new HttpsError('invalid-argument', 'Unsupported payment method.');
   const clinic = db.collection('clinics').doc(clinicId);
   const appointmentRef = clinic.collection('appointments').doc(appointmentId);
-  const paymentRef = clinic.collection('payments').doc();
+  const paymentRef = clinic.collection('payments').doc(paymentId);
   await db.runTransaction(async (tx) => {
-    const appointment = await tx.get(appointmentRef);
+    const [appointment, existingPayment] = await Promise.all([tx.get(appointmentRef), tx.get(paymentRef)]);
     if (!appointment.exists) throw new HttpsError('not-found', 'Appointment not found.');
+    if (existingPayment.exists) {
+      const existing = existingPayment.data()!;
+      if (existing.appointmentId === appointmentId && existing.amount === amount &&
+          existing.method === method && existing.recordedBy === request.auth!.uid) return;
+      throw new HttpsError('already-exists', 'This payment request ID was already used.');
+    }
     tx.set(paymentRef, {
       paymentId: paymentRef.id, clinicId, appointmentId,
       patientId: appointment.data()?.patientId, amount, method, status: 'recorded',
