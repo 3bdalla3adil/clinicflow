@@ -116,6 +116,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Align(alignment: AlignmentDirectional.centerEnd, child: IconButton(tooltip: 'Settings', onPressed: () => context.push('/settings'), icon: const Icon(Icons.settings_outlined))),
                     const Text(
                       'ClinicFlow',
                       textAlign: TextAlign.center,
