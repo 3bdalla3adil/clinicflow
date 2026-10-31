@@ -20,7 +20,7 @@ class SettingsPage extends ConsumerWidget {
       ])),
       const SizedBox(height: 20), Text(t(context,'Language & region','اللغة والمنطقة'), style: theme.textTheme.titleMedium),
       Card(child: Padding(padding: const EdgeInsets.all(16), child: DropdownButtonFormField<String>(
-        value: s.localeCode ?? 'system', isExpanded: true, decoration: InputDecoration(labelText: t(context,'App language','لغة التطبيق'), prefixIcon: const Icon(Icons.language), border: const OutlineInputBorder()),
+        initialValue: s.localeCode ?? 'system', isExpanded: true, decoration: InputDecoration(labelText: t(context,'App language','لغة التطبيق'), prefixIcon: const Icon(Icons.language), border: const OutlineInputBorder()),
         items: [DropdownMenuItem(value:'system',child:Text(t(context,'Device language','لغة الجهاز'))), const DropdownMenuItem(value:'en',child:Text('English')), const DropdownMenuItem(value:'ar',child:Text('العربية'))],
         onChanged: (v) => c.setLocale(v == 'system' ? null : v),
       ))),
