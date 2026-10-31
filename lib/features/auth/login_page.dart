@@ -120,7 +120,45 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (!mounted || email == null) return;
 
     final normalizedEmail = email.trim();
-    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+
+    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+        .hasMatch(normalizedEmail)) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await ref.read(clinicRepositoryProvider).sendPasswordReset(normalizedEmail);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'If an account exists for this address, a password reset email will be sent.',
+          ),
+        ),
+      );
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      setState(() => _error = switch (error.code) {
+        'invalid-email' => 'Enter a valid email address.',
+        'user-not-found' =>
+          'No ClinicFlow account was found for that email address.',
+        'network-request-failed' =>
+          'Network unavailable. Check your connection and try again.',
+        'too-many-requests' =>
+          'Too many attempts. Please wait before requesting another email.',
+        _ => 'Unable to send the reset email. Please try again.',
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'Unable to send the reset email: $error');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   Future<void> _tryDemo() async {
     setState(() {
