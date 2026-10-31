@@ -149,6 +149,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final firebaseAvailable = ref.watch(firebaseAvailableProvider);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -215,10 +216,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: _loading ? null : _resetPassword,
+                        onPressed: _loading || !firebaseAvailable ? null : _resetPassword,
                         child: const Text('Forgot password?'),
                       ),
                     ),
+                    if (!firebaseAvailable) ...[
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Firebase is not configured in this build. Email sign-in, Google sign-in, password reset, and guest booking are unavailable. Use Try Demo or rebuild with the Firebase Android/iOS configuration.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.deepOrange),
+                      ),
+                    ],
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(
@@ -230,7 +239,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     SizedBox(
                       height: 50,
                       child: ElevatedButton(
-                        onPressed: _loading ? null : _signIn,
+                        onPressed: _loading || !firebaseAvailable ? null : _signIn,
                         child: _loading
                             ? const SizedBox(
                                 width: 22,
@@ -242,7 +251,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     const SizedBox(height: 16),
                     OutlinedButton.icon(
-                      onPressed: _loading ? null : () => context.push('/guest'),
+                      onPressed: _loading || !firebaseAvailable ? null : () => context.push('/guest'),
                       icon: const Icon(Icons.person_outline),
                       label: const Text('Continue as guest'),
                     ),
@@ -250,7 +259,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     const Divider(),
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: _loading ? null : _signInWithGoogle,
+                      onPressed: _loading || !firebaseAvailable ? null : _signInWithGoogle,
                       icon: const Icon(Icons.g_mobiledata, size: 28),
                       label: const Text('Continue with Google'),
                     ),
