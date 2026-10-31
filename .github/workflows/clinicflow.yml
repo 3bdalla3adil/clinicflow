@@ -247,7 +247,7 @@ jobs:
             encoded = Path("ios/Runner/GoogleService-Info.plist.hex").read_text().strip()
             Path("ios/Runner/GoogleService-Info.plist").write_bytes(bytes.fromhex(encoded))
             PY
-            FIREBASE_IOS_CONFIG="$(base64 < ios/Runner/GoogleService-Info.plist | tr -d '\\n')"
+            FIREBASE_IOS_CONFIG="$(base64 < ios/Runner/GoogleService-Info.plist)"
             export FIREBASE_IOS_CONFIG
           fi
           python3 - <<'PY'
