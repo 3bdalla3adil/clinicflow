@@ -211,7 +211,9 @@ class StaffWorkspacePage extends ConsumerWidget {
                   ));
                 }
               }
-              if (user.role == UserRole.doctor || user.role == UserRole.admin) {
+              // Clinical notes are restricted to assigned doctors by the callable
+              // backend. Do not expose an admin shortcut that the server rejects.
+              if (user.role == UserRole.doctor) {
                 if (appointment.status == AppointmentStatus.checkedIn) {
                   actions.add(OutlinedButton.icon(
                     onPressed: () => _call(context, ref, 'updateAppointmentStatus', {
