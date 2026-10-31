@@ -172,6 +172,167 @@ class StaffWorkspacePage extends ConsumerWidget {
     amount.dispose();
   }
 
+
+  Future<void> _manageCatalog(
+    BuildContext context,
+    WidgetRef ref,
+    AppUser user,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Wrap(
+            runSpacing: 12,
+            children: [
+              Text('Clinic catalog', style: Theme.of(sheetContext).textTheme.titleLarge),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    _editDoctor(context, ref, user);
+                  },
+                  icon: const Icon(Icons.person_add_alt_1),
+                  label: const Text('Add doctor'),
+                ),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    _editService(context, ref, user);
+                  },
+                  icon: const Icon(Icons.add_business),
+                  label: const Text('Add medical service'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editDoctor(BuildContext context, WidgetRef ref, AppUser user) async {
+    final name = TextEditingController();
+    final specialty = TextEditingController();
+    final duration = TextEditingController(text: '30');
+    final key = GlobalKey<FormState>();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add doctor'),
+        content: Form(
+          key: key,
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Doctor name'), validator: _requiredField),
+              TextFormField(controller: specialty, decoration: const InputDecoration(labelText: 'Specialty'), validator: _requiredField),
+              TextFormField(
+                controller: duration,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Appointment duration (minutes)'),
+                validator: (value) {
+                  final parsed = int.tryParse(value ?? '');
+                  return parsed == null || parsed < 5 || parsed > 480 ? 'Enter 5–480 minutes' : null;
+                },
+              ),
+            ]),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () { if (key.currentState!.validate()) Navigator.pop(dialogContext, true); }, child: const Text('Save doctor')),
+        ],
+      ),
+    );
+    if (saved == true && context.mounted) {
+      await _saveCatalog(context, ref, 'saveDoctor', {
+        'clinicId': user.clinicId,
+        'name': name.text.trim(),
+        'specialty': specialty.text.trim(),
+        'durationMinutes': int.parse(duration.text),
+      });
+      ref.invalidate(doctorsProvider);
+    }
+    name.dispose(); specialty.dispose(); duration.dispose();
+  }
+
+  Future<void> _editService(BuildContext context, WidgetRef ref, AppUser user) async {
+    final name = TextEditingController();
+    final price = TextEditingController(text: '0');
+    final key = GlobalKey<FormState>();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add medical service'),
+        content: Form(
+          key: key,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Service name'), validator: _requiredField),
+            TextFormField(
+              controller: price,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Price'),
+              validator: (value) {
+                final parsed = double.tryParse(value ?? '');
+                return parsed == null || !parsed.isFinite || parsed < 0 ? 'Enter a valid non-negative price' : null;
+              },
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () { if (key.currentState!.validate()) Navigator.pop(dialogContext, true); }, child: const Text('Save service')),
+        ],
+      ),
+    );
+    if (saved == true && context.mounted) {
+      await _saveCatalog(context, ref, 'saveMedicalService', {
+        'clinicId': user.clinicId,
+        'name': name.text.trim(),
+        'price': double.parse(price.text),
+      });
+      ref.invalidate(servicesProvider);
+    }
+    name.dispose(); price.dispose();
+  }
+
+  String? _requiredField(String? value) =>
+      value == null || value.trim().isEmpty ? 'This field is required' : null;
+
+  Future<void> _saveCatalog(
+    BuildContext context,
+    WidgetRef ref,
+    String functionName,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await FirebaseFunctions.instance.httpsCallable(functionName).call(data);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Clinic catalog saved successfully.')),
+        );
+      }
+    } on FirebaseFunctionsException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.message ?? 'The catalog update was rejected.')),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to save the clinic catalog.')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider).valueOrNull;
@@ -181,7 +342,18 @@ class StaffWorkspacePage extends ConsumerWidget {
 
     final isPatient = user.role == UserRole.patient;
     return Scaffold(
-      appBar: AppBar(title: Text(isPatient ? 'My appointments' : '${user.role.name[0].toUpperCase()}${user.role.name.substring(1)} workspace')),
+      appBar: AppBar(
+        title: Text(isPatient ? 'My appointments' : '${user.role.name[0].toUpperCase()}${user.role.name.substring(1)} workspace'),
+        actions: user.role == UserRole.admin
+            ? [
+                IconButton(
+                  tooltip: 'Manage clinic catalog',
+                  icon: const Icon(Icons.medical_services_outlined),
+                  onPressed: () => _manageCatalog(context, ref, user),
+                ),
+              ]
+            : null,
+      ),
       body: ref.watch(appointmentsProvider).when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(
