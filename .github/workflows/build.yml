@@ -60,10 +60,14 @@ jobs:
           FIREBASE_ANDROID_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
         run: |
           set -euo pipefail
-          test -n "${FIREBASE_ANDROID_CONFIG}" || {
-            echo "::error::Set FIREBASE_GOOGLE_SERVICES_JSON_BASE64 in repository Actions secrets (raw JSON or Base64 is accepted)."
-            exit 1
-          }
+          if [ -z "${FIREBASE_ANDROID_CONFIG:-}" ]; then
+            test -s android/app/google-services.json || {
+              echo "::error::Missing Android Firebase app configuration."
+              exit 1
+            }
+            FIREBASE_ANDROID_CONFIG="$(cat android/app/google-services.json)"
+            export FIREBASE_ANDROID_CONFIG
+          fi
           mkdir -p android/app
           python3 - <<'PY'
           import base64, json, os
@@ -220,11 +224,20 @@ jobs:
           FIREBASE_IOS_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
         run: |
           set -euo pipefail
-          test -n "${FIREBASE_IOS_CONFIG}" || {
-            echo "::error::Set FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 in repository Actions secrets (raw plist or Base64 is accepted)."
-            exit 1
-          }
           mkdir -p ios/Runner
+          if [ -z "${FIREBASE_IOS_CONFIG:-}" ]; then
+            test -s ios/Runner/GoogleService-Info.plist.hex || {
+              echo "::error::Missing iOS Firebase app configuration."
+              exit 1
+            }
+            python3 - <<'PY'
+            from pathlib import Path
+            encoded = Path("ios/Runner/GoogleService-Info.plist.hex").read_text().strip()
+            Path("ios/Runner/GoogleService-Info.plist").write_bytes(bytes.fromhex(encoded))
+            PY
+            FIREBASE_IOS_CONFIG="$(base64 < ios/Runner/GoogleService-Info.plist)"
+            export FIREBASE_IOS_CONFIG
+          fi
           python3 - <<'PY'
           import base64, os, plistlib
           from pathlib import Path
