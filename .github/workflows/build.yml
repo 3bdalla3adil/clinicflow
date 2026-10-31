@@ -57,7 +57,7 @@ jobs:
 
       - name: Configure and validate Firebase for Android
         env:
-          FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
+          FIREBASE_ANDROID_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
         run: |
           set -euo pipefail
           test -n "${FIREBASE_ANDROID_CONFIG}" || {
@@ -217,7 +217,7 @@ jobs:
 
       - name: Configure and validate Firebase for iOS
         env:
-          FIREBASE_IOS_CONFIG: ${{ secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
+          FIREBASE_IOS_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
         run: |
           set -euo pipefail
           test -n "${FIREBASE_IOS_CONFIG}" || {
@@ -321,7 +321,7 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: medibook-release-apk
+          name: clinicflow-release-apk
           path: release-assets
 
       - name: Create Android prerelease
@@ -346,7 +346,7 @@ jobs:
       - name: Download IPA artifact
         uses: actions/download-artifact@v4
         with:
-          name: medibook-release-ipa-unsigned
+          name: clinicflow-release-ipa-unsigned
           path: release-assets
 
       - name: Create iOS IPA prerelease
