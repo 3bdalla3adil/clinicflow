@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -38,8 +39,43 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             _emailController.text.trim(),
             _passwordController.text,
           );
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
       if (!mounted) return;
       context.go('/dashboard');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await ref.read(clinicRepositoryProvider).signInWithGoogle();
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
+      if (!mounted) return;
+      context.go('/dashboard');
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      if (error.code == 'popup-closed-by-user' ||
+          error.code == 'web-context-cancelled') {
+        return;
+      }
+      setState(() => _error = switch (error.code) {
+        'account-exists-with-different-credential' =>
+          'An account already exists with a different sign-in method.',
+        'network-request-failed' =>
+          'Network unavailable. Check your connection and try again.',
+        'user-disabled' => 'This account has been disabled. Contact the clinic.',
+        _ => 'Google sign-in failed. Please try again.',
+      });
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -90,6 +126,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         throw StateError('Failed to enter isolated demo mode.');
       }
       await repository.signInAsDemoGuest();
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
       if (!mounted) return;
       context.go('/dashboard');
     } catch (error) {
@@ -202,6 +240,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     const SizedBox(height: 12),
                     const Divider(),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _loading ? null : _signInWithGoogle,
+                      icon: const Icon(Icons.g_mobiledata, size: 28),
+                      label: const Text('Continue with Google'),
+                    ),
                     const SizedBox(height: 12),
                     FilledButton.tonalIcon(
                       onPressed: _loading ? null : _tryDemo,
