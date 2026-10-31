@@ -25,17 +25,15 @@ class DashboardPage extends ConsumerWidget {
       if (!isPatient)
         _DashboardAction('Staff operations', Icons.medical_services_outlined, () => context.push('/staff')),
       _DashboardAction('My profile', Icons.person_outline, () => context.push('/profile')),
+      _DashboardAction('Settings', Icons.settings_outlined, () => context.push('/settings')),
     ];
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('ClinicFlow'),
         actions: [
-          IconButton(
-            tooltip: 'Profile',
-            onPressed: () => context.push('/profile'),
-            icon: const Icon(Icons.person_outline),
-          ),
+          IconButton(tooltip: 'Settings', onPressed: () => context.push('/settings'), icon: const Icon(Icons.settings_outlined)),
+          IconButton(tooltip: 'Profile', onPressed: () => context.push('/profile'), icon: const Icon(Icons.person_outline)),
         ],
       ),
       body: ListView(
