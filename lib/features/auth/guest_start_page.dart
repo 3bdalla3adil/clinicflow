@@ -72,6 +72,9 @@ class _GuestStartPageState extends ConsumerState<GuestStartPage> {
       ref.invalidate(doctorsProvider);
       ref.invalidate(servicesProvider);
       ref.invalidate(appointmentsProvider);
+      // Wait for the profile stream to observe the callable-created guest
+      // document before navigating to authenticated screens.
+      await ref.read(currentUserProvider.future);
       if (!mounted) return;
       context.go('/dashboard');
     } catch (e) {
@@ -85,7 +88,7 @@ class _GuestStartPageState extends ConsumerState<GuestStartPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Continue as guest')),
+      appBar: AppBar(\n        title: const Text('Continue as guest'),\n        leading: IconButton(\n          tooltip: 'Back to sign in',\n          onPressed: _starting ? null : () => context.go('/login'),\n          icon: const Icon(Icons.arrow_back),\n        ),\n      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 480),
