@@ -44,8 +44,7 @@ service cloud.firestore {
 
     match /clinics/{clinicId} {
       allow read: if belongsToClinic(clinicId);
-      // Catalog mutations are callable-only so every change is validated and audited.
-        allow write: if false;
+      allow write: if false;
 
       match /doctors/{doctorId} {
         allow read: if belongsToClinic(clinicId);
