@@ -382,3 +382,81 @@ export const finalizeGuestAccountLink = onCall(async (request) => {
   });
   return { ok: true };
 });
+
+
+/** Admin-only doctor catalog writes with clinic validation and audit history. */
+export const saveDoctor = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const name = required(request.data?.name, 'name');
+  const specialty = required(request.data?.specialty, 'specialty');
+  const durationMinutes = Number(request.data?.durationMinutes ?? 30);
+  const userId = String(request.data?.userId ?? '').trim();
+  const doctorId = String(request.data?.doctorId ?? '').trim();
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (name.length > 120 || specialty.length > 120 ||
+      !Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
+    throw new HttpsError('invalid-argument', 'Doctor details or appointment duration are invalid.');
+  }
+  const clinic = db.collection('clinics').doc(clinicId);
+  const doctorRef = doctorId ? clinic.collection('doctors').doc(doctorId) : clinic.collection('doctors').doc();
+  await db.runTransaction(async (tx) => {
+    if (userId) {
+      const userRef = db.collection('users').doc(userId);
+      const userSnap = await tx.get(userRef);
+      const userData = userSnap.data();
+      if (!userSnap.exists || String(userData?.clinicId ?? '') !== clinicId ||
+          String(userData?.roleId ?? userData?.role ?? '').toUpperCase() !== 'DOCTOR') {
+        throw new HttpsError('failed-precondition', 'Linked account must be a doctor in this clinic.');
+      }
+    }
+    const existing = await tx.get(doctorRef);
+    tx.set(doctorRef, {
+      name, specialty, durationMinutes,
+      ...(userId ? { userId } : {}),
+      active: request.data?.active !== false,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'doctor', entityId: doctorRef.id,
+      action: existing.exists ? 'updated' : 'created',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { doctorId: doctorRef.id };
+});
+
+/** Admin-only medical service writes; price is stored as a non-negative decimal. */
+export const saveMedicalService = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const name = required(request.data?.name, 'name');
+  const price = Number(request.data?.price);
+  const serviceId = String(request.data?.serviceId ?? '').trim();
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (name.length > 120 || !Number.isFinite(price) || price < 0 || price > 100000000) {
+    throw new HttpsError('invalid-argument', 'Service name or price is invalid.');
+  }
+  const clinic = db.collection('clinics').doc(clinicId);
+  const serviceRef = serviceId ? clinic.collection('services').doc(serviceId) : clinic.collection('services').doc();
+  await db.runTransaction(async (tx) => {
+    const existing = await tx.get(serviceRef);
+    tx.set(serviceRef, {
+      name, price,
+      active: request.data?.active !== false,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'service', entityId: serviceRef.id,
+      action: existing.exists ? 'updated' : 'created',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { serviceId: serviceRef.id };
+});
