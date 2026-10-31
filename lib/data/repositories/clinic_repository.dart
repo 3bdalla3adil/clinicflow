@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -9,6 +11,7 @@ abstract interface class ClinicRepository {
   Stream<AppUser?> watchCurrentUser();
   AppUser? get currentUser;
   Future<void> signIn(String email, String password);
+  Future<void> signInWithGoogle();
   Future<void> sendPasswordReset(String email);
   Future<void> linkGuestAccount(String email, String password);
   Future<void> signOut();
@@ -48,46 +51,75 @@ class FirebaseClinicRepository implements ClinicRepository {
   AppUser? get currentUser => _currentUser;
 
   @override
-  Stream<AppUser?> watchCurrentUser() async* {
-    await for (final u in _auth.authStateChanges()) {
-      if (u == null) {
-        _currentUser = null;
-        _clinicId = null;
-        yield null;
-        continue;
-      }
+  Stream<AppUser?> watchCurrentUser() {
+    // Keep the auth listener independent from the Firestore profile listener.
+    // A nested await-for on profile.snapshots() prevents the outer auth stream
+    // from seeing signOut until the profile stream closes.
+    late final StreamController<AppUser?> controller;
+    StreamSubscription<User?>? authSubscription;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? profileSubscription;
+    Future<void> authQueue = Future<void>.value();
 
-      final doc = await _firestore.collection('users').doc(u.uid).get();
-      if (!doc.exists) {
-        if (u.isAnonymous) {
-          yield null;
-          continue;
-        }
-        await _auth.signOut();
-        throw StateError('Account is not provisioned in ClinicFlow.');
-      }
+    controller = StreamController<AppUser?>(
+      onListen: () {
+        authSubscription = _auth.authStateChanges().listen((firebaseUser) {
+          authQueue = authQueue.then((_) async {
+            await profileSubscription?.cancel();
+            profileSubscription = null;
 
-      final data = doc.data();
-      if (data == null) {
-        await _auth.signOut();
-        throw StateError('User document has no data.');
-      }
+            if (firebaseUser == null) {
+              _currentUser = null;
+              _clinicId = null;
+              if (!controller.isClosed) controller.add(null);
+              return;
+            }
 
-      final user = AppUser.fromMap(
-        u.uid,
-        data,
-        fallbackEmail: u.email ?? '',
-      );
-      _currentUser = user;
-      _clinicId = user.clinicId;
-      yield user;
-    }
+            final profile = _firestore.collection('users').doc(firebaseUser.uid);
+            profileSubscription = profile.snapshots().listen(
+              (snapshot) {
+                final data = snapshot.data();
+                if (!snapshot.exists || data == null) {
+                  _currentUser = null;
+                  _clinicId = null;
+                  if (!controller.isClosed) controller.add(null);
+                  // A non-guest account without a provisioned profile is not
+                  // allowed to remain authenticated.
+                  if (!firebaseUser.isAnonymous) unawaited(_auth.signOut());
+                  return;
+                }
+
+                final user = AppUser.fromMap(
+                  firebaseUser.uid,
+                  data,
+                  fallbackEmail: firebaseUser.email ?? '',
+                );
+                _currentUser = user;
+                _clinicId = user.clinicId;
+                if (!controller.isClosed) controller.add(user);
+              },
+              onError: (Object error, StackTrace stackTrace) {
+                if (!controller.isClosed) controller.addError(error, stackTrace);
+              },
+            );
+          }).catchError((Object error, StackTrace stackTrace) {
+            if (!controller.isClosed) controller.addError(error, stackTrace);
+          });
+        }, onError: (Object error, StackTrace stackTrace) {
+          if (!controller.isClosed) controller.addError(error, stackTrace);
+        });
+      },
+      onCancel: () async {
+        await authSubscription?.cancel();
+        await profileSubscription?.cancel();
+      },
+    );
+    return controller.stream;
   }
 
   @override
   Future<void> signIn(String email, String password) async {
     final credential = await _auth.signInWithEmailAndPassword(
-      email: email.trim(),
+      email: email.trim().toLowerCase(),
       password: password,
     );
 
@@ -115,6 +147,36 @@ class FirebaseClinicRepository implements ClinicRepository {
     );
     _currentUser = user;
     _clinicId = user.clinicId;
+  }
+
+  @override
+  Future<void> signInWithGoogle() async {
+    final credential = await _auth.signInWithProvider(GoogleAuthProvider());
+    final firebaseUser = credential.user;
+    if (firebaseUser == null) {
+      throw StateError('Google sign-in did not return an account.');
+    }
+
+    try {
+      final profile = await _firestore.collection('users').doc(firebaseUser.uid).get();
+      final data = profile.data();
+      if (!profile.exists || data == null) {
+        throw StateError(
+          'This Google account is not registered with a ClinicFlow clinic. Ask the clinic administrator to create your account first.',
+        );
+      }
+      _currentUser = AppUser.fromMap(
+        firebaseUser.uid,
+        data,
+        fallbackEmail: firebaseUser.email ?? '',
+      );
+      _clinicId = _currentUser!.clinicId;
+    } catch (_) {
+      await _auth.signOut();
+      _currentUser = null;
+      _clinicId = null;
+      rethrow;
+    }
   }
 
   @override
@@ -317,6 +379,11 @@ class DemoClinicRepository implements ClinicRepository {
     throw UnsupportedError(
       'Use Try Demo to enter the isolated demo environment.',
     );
+  }
+
+  @override
+  Future<void> signInWithGoogle() async {
+    throw UnsupportedError('Google sign-in is unavailable in offline demo mode.');
   }
 
   @override

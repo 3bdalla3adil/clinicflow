@@ -60,10 +60,14 @@ jobs:
           FIREBASE_ANDROID_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
         run: |
           set -euo pipefail
-          test -n "${FIREBASE_ANDROID_CONFIG}" || {
-            echo "::error::Set FIREBASE_GOOGLE_SERVICES_JSON_BASE64 in repository Actions secrets (raw JSON or Base64 is accepted)."
-            exit 1
-          }
+          if [ -z "${FIREBASE_ANDROID_CONFIG:-}" ]; then
+            test -s android/app/google-services.json || {
+              echo "::error::Missing Android Firebase app configuration."
+              exit 1
+            }
+            FIREBASE_ANDROID_CONFIG="$(cat android/app/google-services.json)"
+            export FIREBASE_ANDROID_CONFIG
+          fi
           mkdir -p android/app
           python3 - <<'PY'
           import base64, json, os
@@ -220,46 +224,74 @@ jobs:
           FIREBASE_IOS_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
         run: |
           set -euo pipefail
-          test -n "${FIREBASE_IOS_CONFIG}" || {
-            echo "::error::Set FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 in repository Actions secrets (raw plist or Base64 is accepted)."
-            exit 1
-          }
-          mkdir -p ios/Runner
           python3 - <<'PY'
-          import base64, os, plistlib
+          import base64
+          import os
+          import plistlib
           from pathlib import Path
 
-          raw = os.environ["FIREBASE_IOS_CONFIG"].strip()
-          data = raw.encode()
+          config_path = Path("ios/Runner/GoogleService-Info.plist")
+          raw = os.environ.get("FIREBASE_IOS_CONFIG", "").strip()
+
+          if raw:
+              compact = "".join(raw.split())
+              try:
+                  decoded = base64.b64decode(compact, validate=True)
+                  data = decoded if decoded.lstrip().startswith((b"<?xml", b"bplist")) else raw.encode()
+              except Exception:
+                  data = raw.encode()
+          else:
+              hex_path = Path("ios/Runner/GoogleService-Info.plist.hex")
+              if not hex_path.is_file():
+                  raise SystemExit(
+                      "Missing iOS Firebase config. Provide FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 "
+                      "or commit ios/Runner/GoogleService-Info.plist.hex."
+                  )
+              try:
+                  data = bytes.fromhex(hex_path.read_text(encoding="ascii").strip())
+              except ValueError as error:
+                  raise SystemExit(f"Invalid hex-encoded Firebase plist: {error}")
+
           try:
-              decoded = base64.b64decode("".join(raw.split()), validate=True)
-              if decoded.lstrip().startswith(b"<?xml") or decoded.lstrip().startswith(b"bplist"):
-                  data = decoded
-          except Exception:
-              pass
-          config = plistlib.loads(data)
+              config = plistlib.loads(data)
+          except Exception as error:
+              raise SystemExit(f"Invalid GoogleService-Info.plist: {error}")
+
           required = ("GOOGLE_APP_ID", "API_KEY", "PROJECT_ID", "BUNDLE_ID")
           missing = [key for key in required if not config.get(key)]
           if missing:
               raise SystemExit("GoogleService-Info.plist is missing: " + ", ".join(missing))
-          if config["PROJECT_ID"] != os.environ["FIREBASE_PROJECT_ID"]:
-              raise SystemExit(f"Expected Firebase project {os.environ['FIREBASE_PROJECT_ID']!r}, got {config['PROJECT_ID']!r}")
-          if config["BUNDLE_ID"] != os.environ["IOS_BUNDLE_ID"]:
-              raise SystemExit(f"Expected iOS bundle ID {os.environ['IOS_BUNDLE_ID']!r}, got {config['BUNDLE_ID']!r}")
-          Path("ios/Runner/GoogleService-Info.plist").write_bytes(data)
-          print(f"Validated iOS Firebase config: project={config['PROJECT_ID']}, bundle={config['BUNDLE_ID']}")
+          expected_project = os.environ["FIREBASE_PROJECT_ID"]
+          expected_bundle = os.environ["IOS_BUNDLE_ID"]
+          if config["PROJECT_ID"] != expected_project:
+              raise SystemExit(f"Expected Firebase project {expected_project!r}, got {config['PROJECT_ID']!r}")
+          if config["BUNDLE_ID"] != expected_bundle:
+              raise SystemExit(f"Expected iOS bundle ID {expected_bundle!r}, got {config['BUNDLE_ID']!r}")
+
+          config_path.parent.mkdir(parents=True, exist_ok=True)
+          config_path.write_bytes(data)
+          print(f"Validated iOS Firebase config: project={expected_project}, bundle={expected_bundle}")
           PY
 
+      - name: Add Firebase plist to the Runner target
+        run: |
+          set -euo pipefail
           gem install xcodeproj --no-document
-          ruby <<'RUBY'
+          ruby - <<'RUBY'
           require 'xcodeproj'
+
           project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
-          target = project.targets.find { |t| t.name == 'Runner' } or abort('Runner target not found')
+          target = project.targets.find { |item| item.name == 'Runner' }
+          abort 'Runner target not found in Xcode project' unless target
+
           file_ref = project.main_group.find_file_by_path('Runner/GoogleService-Info.plist')
           file_ref ||= project.main_group.new_file('Runner/GoogleService-Info.plist')
           resources = target.resources_build_phase
-          resources.add_file_reference(file_ref, true) unless resources.files_references.include?(file_ref)
+          unless resources.files_references.include?(file_ref)
+            resources.add_file_reference(file_ref, true)
+          end
           project.save
+          puts 'GoogleService-Info.plist is included in the Runner app bundle.'
           RUBY
 
       - name: Install dependencies and generate localizations
@@ -267,38 +299,52 @@ jobs:
           flutter pub get
           flutter gen-l10n
 
-      - name: Build unsigned IPA
-        run: flutter build ipa --release --no-codesign --dart-define=ENABLE_DEMO_AUTH=false --dart-define=ENABLE_FIREBASE_AUTH=true
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign --dart-define=ENABLE_DEMO_AUTH=false --dart-define=ENABLE_FIREBASE_AUTH=true
 
-      - name: Verify unsigned IPA
+      - name: Verify and package unsigned IPA
+        env:
+          IOS_BUNDLE_ID: ${{ env.IOS_BUNDLE_ID }}
+          FIREBASE_PROJECT_ID: ${{ env.FIREBASE_PROJECT_ID }}
         run: |
           set -euo pipefail
-          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
-          test -n "$ipa"
-          unzip -t "$ipa"
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          unzip -q "$ipa" -d "$tmp"
-          test -s "$tmp/Payload/Runner.app/Info.plist"
-          python3 - "$tmp/Payload/Runner.app/Info.plist" "$tmp/Payload/Runner.app/GoogleService-Info.plist" <<'PY'
-          import os, plistlib, sys
-          with open(sys.argv[1], "rb") as stream:
+          app_path="build/ios/iphoneos/Runner.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error::Flutter did not produce $app_path"
+            echo "Available iOS build outputs:"
+            find build/ios -maxdepth 4 -print 2>/dev/null | head -200 || true
+            exit 1
+          fi
+          python3 - "$app_path" <<'PY'
+          import os
+          import plistlib
+          import sys
+          from pathlib import Path
+
+          app = Path(sys.argv[1])
+          info_path = app / "Info.plist"
+          firebase_path = app / "GoogleService-Info.plist"
+          if not info_path.is_file():
+              raise SystemExit("Runner.app/Info.plist is missing")
+          with info_path.open("rb") as stream:
               info = plistlib.load(stream)
           bundle_id = info.get("CFBundleIdentifier", "")
           if bundle_id != os.environ["IOS_BUNDLE_ID"]:
               raise SystemExit(f"Unexpected iOS bundle identifier: {bundle_id!r}")
-          if not os.path.isfile(sys.argv[2]):
+          if not firebase_path.is_file():
               raise SystemExit("GoogleService-Info.plist was not bundled into Runner.app")
-          print(f"Validated unsigned IPA bundle ID: {bundle_id}")
+          with firebase_path.open("rb") as stream:
+              firebase = plistlib.load(stream)
+          if firebase.get("PROJECT_ID") != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit("Bundled Firebase plist points to the wrong Firebase project")
+          if firebase.get("BUNDLE_ID") != os.environ["IOS_BUNDLE_ID"]:
+              raise SystemExit("Bundled Firebase plist has the wrong bundle ID")
+          print(f"Validated unsigned Runner.app: bundle={bundle_id}, Firebase project={firebase['PROJECT_ID']}")
           PY
-
-      - name: Package unsigned IPA for download
-        run: |
-          set -euo pipefail
-          mkdir -p release-assets
-          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
-          test -n "$ipa"
-          cp "$ipa" release-assets/clinicflow-ios-unsigned.ipa
+          mkdir -p release-assets/Payload
+          cp -R "$app_path" release-assets/Payload/Runner.app
+          (cd release-assets && zip -qry clinicflow-ios-unsigned.ipa Payload)
+          unzip -t release-assets/clinicflow-ios-unsigned.ipa
           (cd release-assets && zip -q clinicflow-ios-unsigned-ipa.zip clinicflow-ios-unsigned.ipa)
           unzip -t release-assets/clinicflow-ios-unsigned-ipa.zip
 

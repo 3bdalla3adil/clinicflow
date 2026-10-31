@@ -22,6 +22,7 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   final _accountPassword = TextEditingController();
   String? _loadedUserId;
   bool _saving = false;
+  bool _signingOut = false;
   String? _error;
 
   @override
@@ -96,12 +97,24 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
   }
 
   Future<void> _signOut() async {
-    await ref.read(clinicRepositoryProvider).signOut();
-    ref.read(demoModeProvider.notifier).state = false;
-    ref.invalidate(currentUserProvider);
-    ref.invalidate(appointmentsProvider);
-    if (!mounted) return;
-    context.go('/login');
+    if (_signingOut) return;
+    setState(() {
+      _signingOut = true;
+      _error = null;
+    });
+    try {
+      await ref.read(clinicRepositoryProvider).signOut();
+      ref.read(demoModeProvider.notifier).state = false;
+      ref.invalidate(currentUserProvider);
+      ref.invalidate(appointmentsProvider);
+      if (!mounted) return;
+      context.go('/login');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'Unable to sign out. Please try again: $error');
+    } finally {
+      if (mounted) setState(() => _signingOut = false);
+    }
   }
 
   @override
@@ -216,9 +229,11 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
           ],
           const SizedBox(height: 20),
           OutlinedButton.icon(
-            onPressed: _signOut,
-            icon: const Icon(Icons.logout),
-            label: const Text('Sign out'),
+            onPressed: _signingOut ? null : _signOut,
+            icon: _signingOut
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.logout),
+            label: Text(_signingOut ? 'Signing out…' : 'Sign out'),
           ),
         ],
       ),
