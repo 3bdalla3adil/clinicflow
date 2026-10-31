@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: medibook-release-${{ github.ref }}-${{ inputs.platform }}
+  group: clinicflow-release-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: false
 
 env:
@@ -161,11 +161,19 @@ jobs:
           }
           echo "Verified APK archive and application ID: $app_id"
 
+      - name: Package APK for download
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp build/app/outputs/flutter-apk/app-release.apk release-assets/clinicflow-release.apk
+          (cd release-assets && zip -q clinicflow-android-apk.zip clinicflow-release.apk)
+          unzip -t release-assets/clinicflow-android-apk.zip
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: medibook-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: clinicflow-release-apk
+          path: release-assets/clinicflow-android-apk.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -284,11 +292,21 @@ jobs:
           print(f"Validated unsigned IPA bundle ID: {bundle_id}")
           PY
 
+      - name: Package unsigned IPA for download
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
+          test -n "$ipa"
+          cp "$ipa" release-assets/clinicflow-ios-unsigned.ipa
+          (cd release-assets && zip -q clinicflow-ios-unsigned-ipa.zip clinicflow-ios-unsigned.ipa)
+          unzip -t release-assets/clinicflow-ios-unsigned-ipa.zip
+
       - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: medibook-release-ipa-unsigned
-          path: build/ios/ipa/*.ipa
+          name: clinicflow-release-ipa-unsigned
+          path: release-assets/clinicflow-ios-unsigned-ipa.zip
           if-no-files-found: error
           retention-days: 1
 
@@ -309,12 +327,12 @@ jobs:
       - name: Create Android prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: medibook-android-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
-          name: MediBook Android Prerelease ${{ github.run_number }}
+          tag_name: clinicflow-android-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ClinicFlow Android Prerelease ${{ github.run_number }}
           prerelease: true
           make_latest: false
           generate_release_notes: true
-          files: release-assets/app-release.apk
+          files: release-assets/clinicflow-android-apk.zip
           fail_on_unmatched_files: true
 
   prerelease-ipa:
@@ -334,10 +352,10 @@ jobs:
       - name: Create iOS IPA prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: medibook-ios-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
-          name: MediBook iOS IPA Prerelease ${{ github.run_number }}
+          tag_name: clinicflow-ios-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ClinicFlow iOS IPA Prerelease ${{ github.run_number }}
           prerelease: true
           make_latest: false
           generate_release_notes: true
-          files: release-assets/*.ipa
+          files: release-assets/clinicflow-ios-unsigned-ipa.zip
           fail_on_unmatched_files: true
