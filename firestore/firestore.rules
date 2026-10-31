@@ -1,14 +1,107 @@
 rules_version = '2';
-service cloud.firestore { match /databases/{database}/documents {
-  function signedIn() { return request.auth != null; }
-  function user() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
-  function role(r) { return signedIn() && user().roleId == r; }
-  match /users/{id} { allow read: if signedIn() && (request.auth.uid == id || role('ADMIN')); allow create: if signedIn() && request.auth.uid == id; allow update: if signedIn() && request.auth.uid == id && !('roleId' in request.resource.data.diff(resource.data).affectedKeys()) && !('clinicId' in request.resource.data.diff(resource.data).affectedKeys()); }
-  match /doctors/{id} { allow read: if signedIn(); allow write: if role('ADMIN'); }
-  match /services/{id} { allow read: if signedIn(); allow write: if role('ADMIN'); }
-  match /appointments/{id} { allow read: if signedIn() && (resource.data.patientId == request.auth.uid || role('ADMIN') || role('RECEPTION') || role('DOCTOR')); allow create: if signedIn(); allow update: if role('ADMIN') || role('RECEPTION') || role('DOCTOR'); allow delete: if false; }
-  match /consultations/{id} { allow read, write: if role('ADMIN') || role('DOCTOR'); }
-  match /payments/{id} { allow read, write: if role('ADMIN') || role('RECEPTION') || role('ACCOUNTANT'); }
-  match /auditLogs/{id} { allow read: if role('ADMIN'); allow create: if signedIn(); allow update, delete: if false; }
-  match /{document=**} { allow read, write: if false; }
-} }
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(roleName) {
+      return signedIn() &&
+        (userData().roleId == roleName ||
+         userData().role == roleName.toLowerCase());
+    }
+
+    function belongsToClinic(clinicId) {
+      return signedIn() && userData().clinicId == clinicId;
+    }
+
+    function isAssignedDoctor(clinicId, doctorId) {
+      return hasRole('DOCTOR') && (
+        doctorId == request.auth.uid ||
+        (exists(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)) &&
+          (
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userId', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('uid', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('authUid', '') == request.auth.uid ||
+            get(/databases/$(database)/documents/clinics/$(clinicId)/doctors/$(doctorId)).data.get('userUid', '') == request.auth.uid
+          ))
+      );
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      // Provisioning and role/clinic assignment must happen in trusted server code.
+      allow create, delete: if false;
+      allow update: if signedIn() && request.auth.uid == uid
+        && !request.resource.data.diff(resource.data).affectedKeys()
+          .hasAny(['role', 'roleId', 'clinicId', 'permissions', 'active']);
+    }
+
+    match /clinics/{clinicId} {
+      allow read: if belongsToClinic(clinicId);
+      allow write: if hasRole('ADMIN') && belongsToClinic(clinicId);
+
+      match /doctors/{doctorId} {
+        allow read: if belongsToClinic(clinicId);
+        // Use saveDoctor so changes are validated and audited.
+        allow write: if false;
+      }
+
+      match /services/{serviceId} {
+        allow read: if belongsToClinic(clinicId);
+        // Use saveMedicalService so changes are validated and audited.
+        allow write: if false;
+      }
+
+      match /appointments/{appointmentId} {
+        allow read: if belongsToClinic(clinicId) &&
+          (hasRole('ADMIN') || hasRole('RECEPTION') ||
+           (hasRole('DOCTOR') && isAssignedDoctor(clinicId, resource.data.doctorId)) ||
+           (hasRole('PATIENT') && resource.data.patientId == request.auth.uid));
+        // Appointment creation and state transitions are callable-function-only.
+        allow create, update, delete: if false;
+      }
+
+      match /appointment_slots/{slotId} {
+        allow read, write: if false;
+      }
+
+      match /patients/{patientId} {
+        // Doctors must use assigned appointment/consultation access; no clinic-wide patient directory.
+        allow read: if belongsToClinic(clinicId) &&
+          (hasRole('ADMIN') || hasRole('RECEPTION') ||
+           (hasRole('PATIENT') && patientId == request.auth.uid));
+        allow create, update: if belongsToClinic(clinicId) &&
+          (hasRole('ADMIN') || hasRole('RECEPTION'));
+        allow delete: if hasRole('ADMIN') && belongsToClinic(clinicId);
+      }
+
+      match /consultations/{consultationId} {
+        allow read: if belongsToClinic(clinicId) &&
+          (hasRole('ADMIN') ||
+           (hasRole('DOCTOR') && resource.data.doctorId == request.auth.uid));
+        allow write: if false;
+      }
+
+      match /payments/{paymentId} {
+        allow read: if belongsToClinic(clinicId) &&
+          (hasRole('ADMIN') || hasRole('RECEPTION') || hasRole('ACCOUNTANT'));
+        allow write: if false;
+      }
+
+      match /audit_logs/{logId} {
+        allow read: if hasRole('ADMIN') && belongsToClinic(clinicId);
+        allow write: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

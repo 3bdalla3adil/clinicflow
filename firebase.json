@@ -1,4 +1,17 @@
 {
-  "firestore": { "rules": "firestore/firestore.rules", "indexes": "firestore/firestore.indexes.json" },
-  "functions": { "source": "functions" }
+  "firestore": {
+    "rules": "firestore/firestore.rules",
+    "indexes": "firestore/firestore.indexes.json"
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    },
+    "ui": {
+      "enabled": false
+    }
+  }
 }

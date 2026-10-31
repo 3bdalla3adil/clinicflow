@@ -111,35 +111,43 @@ class _BookingPageState extends ConsumerState<BookingPage> {
             onPressed: doctor == null || service == null
                 ? null
                 : () async {
-                    final appointment = await ref
-                        .read(clinicRepositoryProvider)
-                        .createAppointment(
-                          doctor: doctor!,
-                          service: service!,
-                          date: date,
-                          startTime: time,
-                        );
+                    try {
+                      final appointment = await ref
+                          .read(clinicRepositoryProvider)
+                          .createAppointment(
+                            doctor: doctor!,
+                            service: service!,
+                            date: date,
+                            startTime: time,
+                          );
+                      ref.invalidate(appointmentsProvider);
 
-                    if (!context.mounted) return;
+                      if (!context.mounted) return;
 
-                    await showDialog<void>(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Appointment confirmed'),
-                        content: Text(
-                          '${appointment.number}\n'
-                          '${appointment.doctor.name}\n'
-                          '${appointment.service.name}\n'
-                          '${appointment.startTime}',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => context.go('/appointments'),
-                            child: const Text('View appointments'),
+                      await showDialog<void>(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Appointment confirmed'),
+                          content: Text(
+                            '${appointment.number}\n'
+                            '${appointment.doctor.name}\n'
+                            '${appointment.service.name}\n'
+                            '${appointment.startTime}',
                           ),
-                        ],
-                      ),
-                    );
+                          actions: [
+                            TextButton(
+                              onPressed: () => context.go('/appointments'),
+                              child: const Text('View appointments'),
+                            ),
+                          ],
+                        ),
+                      );
+                    } catch (error) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Booking failed: $error')),
+                      );
+                    }
                   },
             child: const Text('Confirm appointment'),
           ),

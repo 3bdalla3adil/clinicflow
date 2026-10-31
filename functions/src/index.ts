@@ -5,29 +5,466 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 initializeApp();
 const db = getFirestore();
 
+type StaffRole = 'ADMIN' | 'RECEPTION' | 'DOCTOR' | 'ACCOUNTANT' | 'PATIENT';
+
+async function getActor(uid: string): Promise<{ role: StaffRole; clinicId: string }> {
+  const snap = await db.collection('users').doc(uid).get();
+  if (!snap.exists) throw new HttpsError('failed-precondition', 'Your ClinicFlow profile is not provisioned.');
+  const data = snap.data()!;
+  const role = String(data.roleId ?? data.role ?? 'PATIENT').toUpperCase() as StaffRole;
+  const clinicId = String(data.clinicId ?? '');
+  if (!clinicId) throw new HttpsError('failed-precondition', 'Your account is not assigned to a clinic.');
+  return { role, clinicId };
+}
+
+function requireRole(role: StaffRole, allowed: StaffRole[]) {
+  if (!allowed.includes(role)) throw new HttpsError('permission-denied', 'Your role cannot perform this action.');
+}
+
+function required(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new HttpsError('invalid-argument', `${name} is required.`);
+  }
+  return value.trim();
+}
+
+function timeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function isValidCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function isAssignedDoctor(actorUid: string, doctorId: string, doctorData: FirebaseFirestore.DocumentData): boolean {
+  return actorUid === doctorId ||
+    [doctorData.userId, doctorData.uid, doctorData.authUid, doctorData.userUid]
+      .some((value) => typeof value === 'string' && value === actorUid);
+}
+
+function assertAssignedDoctor(actor: { role: StaffRole; clinicId: string }, actorUid: string,
+                              appointmentData: FirebaseFirestore.DocumentData,
+                              doctorData: FirebaseFirestore.DocumentData | undefined): void {
+  if (actor.role === 'DOCTOR' &&
+      (!doctorData || !isAssignedDoctor(actorUid, String(appointmentData.doctorId ?? ''), doctorData))) {
+    throw new HttpsError('permission-denied', 'Doctors can only access appointments assigned to them.');
+  }
+}
+
+/** All bookings go through this transaction; clients cannot self-assign a clinic or patient. */
 export const createAppointment = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
-  const { clinicId, patientId, doctorId, serviceId, appointmentDate, startTime, endTime } = request.data ?? {};
-  if (![clinicId, patientId, doctorId, serviceId, appointmentDate, startTime, endTime].every(Boolean)) {
-    throw new HttpsError('invalid-argument', 'Required appointment fields are missing.');
+  const actor = await getActor(request.auth.uid);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const patientId = required(request.data?.patientId, 'patientId');
+  const doctorId = required(request.data?.doctorId, 'doctorId');
+  const serviceId = required(request.data?.serviceId, 'serviceId');
+  const appointmentDate = required(request.data?.appointmentDate, 'appointmentDate');
+  const startTime = required(request.data?.startTime, 'startTime');
+  const endTime = required(request.data?.endTime, 'endTime');
+
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (actor.role === 'PATIENT' && patientId !== request.auth.uid) {
+    throw new HttpsError('permission-denied', 'Patients can only book for themselves.');
   }
-  if (patientId !== request.auth.uid && !['ADMIN', 'RECEPTION'].includes(String(request.auth.token.roleId))) {
-    throw new HttpsError('permission-denied', 'You cannot create an appointment for this patient.');
+  requireRole(actor.role, ['ADMIN', 'RECEPTION', 'PATIENT']);
+  if (!isValidCalendarDate(appointmentDate) ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) ||
+      timeToMinutes(endTime) <= timeToMinutes(startTime) ||
+      timeToMinutes(endTime) - timeToMinutes(startTime) > 480) {
+    throw new HttpsError('invalid-argument', 'Date or appointment time is invalid (maximum duration is 8 hours).');
   }
-  const slot = `${doctorId}_${appointmentDate}_${startTime}`;
-  const ref = db.collection('appointments').doc();
-  await db.runTransaction(async (tx) => {
-    const duplicate = await db.collection('appointments').where('slotKey', '==', slot).where('status', 'in', ['scheduled', 'checked_in', 'in_consultation']).limit(1).get();
-    if (!duplicate.empty) throw new HttpsError('already-exists', 'That appointment time is no longer available.');
-    tx.set(ref, { appointmentId: ref.id, clinicId, patientId, doctorId, serviceId, appointmentDate, startTime, endTime, slotKey: slot, status: 'scheduled', source: 'mobile', createdBy: request.auth.uid, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+
+  const clinic = db.collection('clinics').doc(clinicId);
+  const doctorRef = clinic.collection('doctors').doc(doctorId);
+  const serviceRef = clinic.collection('services').doc(serviceId);
+  const appointments = clinic.collection('appointments');
+  const appointmentRef = appointments.doc();
+  const slotKey = `${doctorId}_${appointmentDate}_${startTime.replace(':', '')}`;
+  const userRef = db.collection('users').doc(patientId);
+  const startMinute = timeToMinutes(startTime);
+  const endMinute = timeToMinutes(endTime);
+  // One lock per minute prevents concurrent bookings with different but overlapping start times.
+  const slotRefs = Array.from({ length: endMinute - startMinute }, (_, offset) => {
+    const minute = startMinute + offset;
+    const minuteKey = `${String(Math.floor(minute / 60)).padStart(2, '0')}${String(minute % 60).padStart(2, '0')}`;
+    return clinic.collection('appointment_slots').doc(`${doctorId}_${appointmentDate}_${minuteKey}`);
   });
-  return { appointmentId: ref.id };
+
+  await db.runTransaction(async (tx) => {
+    const [doctorSnap, serviceSnap, patientSnap, existingAppointments, ...slotSnaps] = await Promise.all([
+      tx.get(doctorRef), tx.get(serviceRef), tx.get(userRef),
+      tx.get(appointments.where('doctorId', '==', doctorId).where('appointmentDate', '==', appointmentDate)),
+      ...slotRefs.map((ref) => tx.get(ref)),
+    ]);
+    if (!doctorSnap.exists) throw new HttpsError('not-found', 'Doctor was not found in this clinic.');
+    if (!serviceSnap.exists) throw new HttpsError('not-found', 'Service was not found in this clinic.');
+    if (!patientSnap.exists) throw new HttpsError('not-found', 'Patient profile was not found.');
+    const patientData = patientSnap.data()!;
+    if (String(patientData.clinicId ?? '') !== clinicId ||
+        String(patientData.roleId ?? patientData.role ?? '').toUpperCase() !== 'PATIENT') {
+      throw new HttpsError('permission-denied', 'The selected patient is not registered with this clinic.');
+    }
+
+    const activeStatuses = new Set(['scheduled', 'checkedIn', 'inConsultation']);
+    for (const existing of existingAppointments.docs) {
+      const data = existing.data();
+      if (!activeStatuses.has(String(data.status ?? 'scheduled'))) continue;
+      const existingStart = typeof data.startTime === 'string' ? timeToMinutes(data.startTime) : -1;
+      const existingEnd = typeof data.endTime === 'string' ? timeToMinutes(data.endTime) : -1;
+      if (existingStart >= 0 && existingEnd > existingStart &&
+          startMinute < existingEnd && existingStart < endMinute) {
+        throw new HttpsError('already-exists', 'That appointment overlaps an existing booking.');
+      }
+    }
+
+    const occupiedAppointmentIds = [...new Set(slotSnaps
+      .filter((snap) => snap.exists)
+      .map((snap) => String(snap.data()?.appointmentId ?? ''))
+      .filter((id) => id.length > 0))];
+    const occupiedSnapshots = await Promise.all(occupiedAppointmentIds.map((id) => tx.get(appointments.doc(id))));
+    const statusById = new Map(occupiedSnapshots.map((snap) => [
+      snap.id, snap.exists ? String(snap.data()?.status ?? 'scheduled') : 'missing',
+    ]));
+    for (const snap of slotSnaps) {
+      if (!snap.exists) continue;
+      const previousId = String(snap.data()?.appointmentId ?? '');
+      if (previousId && activeStatuses.has(statusById.get(previousId) ?? 'scheduled')) {
+        throw new HttpsError('already-exists', 'That appointment time is no longer available.');
+      }
+    }
+
+    const doctor = doctorSnap.data()!;
+    const service = serviceSnap.data()!;
+    const date = new Date(`${appointmentDate}T00:00:00.000Z`);
+    tx.set(appointmentRef, {
+      appointmentId: appointmentRef.id,
+      number: `APT-${appointmentDate.replaceAll('-', '')}-${appointmentRef.id.slice(0, 6).toUpperCase()}`,
+      clinicId, patientId, doctorId, serviceId, doctor, service,
+      date, appointmentDate, startTime, endTime, slotKey,
+      status: 'scheduled', source: 'mobile', createdBy: request.auth!.uid,
+      createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+    });
+    for (const slotRef of slotRefs) {
+      tx.set(slotRef, { appointmentId: appointmentRef.id, appointmentDate, startTime, endTime, doctorId, updatedAt: FieldValue.serverTimestamp() });
+    }
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'appointment', entityId: appointmentRef.id, action: 'created',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { appointmentId: appointmentRef.id };
 });
 
+const TRANSITIONS: Record<string, string[]> = {
+  scheduled: ['checkedIn', 'cancelled', 'noShow'],
+  checkedIn: ['inConsultation', 'cancelled'],
+  inConsultation: ['completed'],
+  completed: [], cancelled: [], noShow: [],
+};
+
+export const updateAppointmentStatus = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const appointmentId = required(request.data?.appointmentId, 'appointmentId');
+  const nextStatus = required(request.data?.status, 'status');
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  requireRole(actor.role, ['ADMIN', 'RECEPTION', 'DOCTOR']);
+  if (!Object.hasOwn(TRANSITIONS, nextStatus)) throw new HttpsError('invalid-argument', 'Unknown appointment status.');
+  if (actor.role === 'RECEPTION' && ['inConsultation', 'completed'].includes(nextStatus)) {
+    throw new HttpsError('permission-denied', 'Reception cannot change clinical status.');
+  }
+  if (actor.role === 'DOCTOR' && !['inConsultation', 'completed'].includes(nextStatus)) {
+    throw new HttpsError('permission-denied', 'Doctors can only manage consultation status.');
+  }
+  const ref = db.collection('clinics').doc(clinicId).collection('appointments').doc(appointmentId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new HttpsError('not-found', 'Appointment not found.');
+    const appointmentData = snap.data()!;
+    if (actor.role === 'DOCTOR') {
+      const assignedDoctorId = String(appointmentData.doctorId ?? '');
+      const doctorSnap = assignedDoctorId ? await tx.get(db.collection('clinics').doc(clinicId).collection('doctors').doc(assignedDoctorId)) : null;
+      assertAssignedDoctor(actor, request.auth!.uid, appointmentData, doctorSnap?.exists ? doctorSnap.data() : undefined);
+    }
+    const current = String(appointmentData.status ?? 'scheduled');
+    if (!TRANSITIONS[current]?.includes(nextStatus)) {
+      throw new HttpsError('failed-precondition', `Cannot move an appointment from ${current} to ${nextStatus}.`);
+    }
+    tx.update(ref, { status: nextStatus, updatedAt: FieldValue.serverTimestamp(), updatedBy: request.auth!.uid });
+    tx.set(db.collection('clinics').doc(clinicId).collection('audit_logs').doc(), {
+      clinicId, entityType: 'appointment', entityId: appointmentId,
+      action: `status:${current}->${nextStatus}`, actorId: request.auth!.uid,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true };
+});
+
+export const saveConsultation = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['DOCTOR']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const appointmentId = required(request.data?.appointmentId, 'appointmentId');
+  const notes = required(request.data?.notes, 'notes');
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  const clinic = db.collection('clinics').doc(clinicId);
+  const appointmentRef = clinic.collection('appointments').doc(appointmentId);
+  const consultationRef = clinic.collection('consultations').doc(appointmentId);
+  await db.runTransaction(async (tx) => {
+    const appointment = await tx.get(appointmentRef);
+    if (!appointment.exists) throw new HttpsError('not-found', 'Appointment not found.');
+    const appointmentData = appointment.data()!;
+    const assignedDoctorId = String(appointmentData.doctorId ?? '');
+    const doctorSnap = await tx.get(clinic.collection('doctors').doc(assignedDoctorId));
+    assertAssignedDoctor(actor, request.auth!.uid, appointmentData, doctorSnap.exists ? doctorSnap.data() : undefined);
+    if (!['checkedIn', 'inConsultation'].includes(String(appointmentData.status))) {
+      throw new HttpsError('failed-precondition', 'The patient must be checked in before a consultation is recorded.');
+    }
+    tx.set(consultationRef, {
+      clinicId, appointmentId, patientId: appointmentData.patientId,
+      doctorId: request.auth!.uid, notes, diagnosis: String(request.data?.diagnosis ?? ''),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'consultation', entityId: appointmentId,
+      action: 'saved', actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true };
+});
+
+export const recordPayment = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN', 'RECEPTION', 'ACCOUNTANT']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const appointmentId = required(request.data?.appointmentId, 'appointmentId');
+  const amount = Number(request.data?.amount);
+  const method = required(request.data?.method, 'method');
+  const paymentId = required(request.data?.paymentId, 'paymentId');
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(paymentId)) throw new HttpsError('invalid-argument', 'Payment request ID is invalid.');
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 100000000 || Math.round(amount * 100) !== amount * 100) throw new HttpsError('invalid-argument', 'Payment amount must be positive and limited to two decimal places.');
+  if (!['cash', 'card', 'insurance', 'transfer'].includes(method)) throw new HttpsError('invalid-argument', 'Unsupported payment method.');
+  const clinic = db.collection('clinics').doc(clinicId);
+  const appointmentRef = clinic.collection('appointments').doc(appointmentId);
+  const paymentRef = clinic.collection('payments').doc(paymentId);
+  await db.runTransaction(async (tx) => {
+    const [appointment, existingPayment] = await Promise.all([tx.get(appointmentRef), tx.get(paymentRef)]);
+    if (!appointment.exists) throw new HttpsError('not-found', 'Appointment not found.');
+    if (existingPayment.exists) {
+      const existing = existingPayment.data()!;
+      if (existing.appointmentId === appointmentId && existing.amount === amount &&
+          existing.method === method && existing.recordedBy === request.auth!.uid) return;
+      throw new HttpsError('already-exists', 'This payment request ID was already used.');
+    }
+    tx.set(paymentRef, {
+      paymentId: paymentRef.id, clinicId, appointmentId,
+      patientId: appointment.data()?.patientId, amount, method, status: 'recorded',
+      recordedBy: request.auth!.uid, createdAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'payment', entityId: paymentRef.id, action: 'recorded',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { paymentId: paymentRef.id };
+});
+
+// Legacy compatibility endpoint: clients cannot create audit records.
 export const writeAuditLog = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
-  const { clinicId, entityType, entityId, action } = request.data ?? {};
-  if (![clinicId, entityType, entityId, action].every(Boolean)) throw new HttpsError('invalid-argument', 'Audit fields are missing.');
-  await db.collection('auditLogs').add({ clinicId, entityType, entityId, action, userId: request.auth.uid, actorType: request.auth.token.roleId ?? 'UNKNOWN', timestamp: FieldValue.serverTimestamp() });
+  throw new HttpsError('permission-denied', 'Audit records are created only by trusted server-side operations.');
+});
+
+/** Safe public clinic list for the guest booking entry point. */
+export const listPublicClinics = onCall(async () => {
+  const snapshot = await db.collection('clinics').get();
+  return {
+    clinics: snapshot.docs
+      .filter((doc) => doc.data().active !== false && doc.data().publicBookingEnabled !== false)
+      .map((doc) => ({
+        id: doc.id,
+        name: String(doc.data().name ?? doc.data().clinicName ?? 'Clinic'),
+        city: String(doc.data().city ?? ''),
+      })),
+  };
+});
+
+/** Create the minimum patient profile needed to reserve appointments. */
+export const startGuestProfile = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Continue as guest requires an anonymous Firebase session.');
+  if (request.auth.token.firebase?.sign_in_provider !== 'anonymous') {
+    throw new HttpsError('failed-precondition', 'This action is only for anonymous guest sessions.');
+  }
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const clinic = await db.collection('clinics').doc(clinicId).get();
+  if (!clinic.exists || clinic.data()?.active === false || clinic.data()?.publicBookingEnabled === false) {
+    throw new HttpsError('not-found', 'This clinic is not available for guest booking.');
+  }
+  const userRef = db.collection('users').doc(request.auth.uid);
+  const existing = await userRef.get();
+  if (existing.exists && existing.data()?.clinicId !== clinicId) {
+    throw new HttpsError('failed-precondition', 'This guest session is already linked to another clinic.');
+  }
+  if (!existing.exists) {
+    await userRef.create({
+      name: 'Guest patient',
+      email: '',
+      phone: '',
+      roleId: 'PATIENT',
+      clinicId,
+      isGuest: true,
+      profileComplete: false,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+  return { ok: true, clinicId };
+});
+
+/** Guests can add contact details later without granting themselves a role. */
+export const updateGuestProfile = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const uid = request.auth.uid;
+  const userRef = db.collection('users').doc(uid);
+  const snap = await userRef.get();
+  if (!snap.exists) throw new HttpsError('failed-precondition', 'Start a guest session first.');
+  const user = snap.data()!;
+  if (String(user.roleId ?? user.role ?? '').toUpperCase() !== 'PATIENT') {
+    throw new HttpsError('permission-denied', 'Only patient profiles can use this operation.');
+  }
+  const name = required(request.data?.name, 'name');
+  const phone = String(request.data?.phone ?? '').trim();
+  const email = String(request.data?.email ?? '').trim();
+  if (name.length > 100 || phone.length > 30 || email.length > 254) {
+    throw new HttpsError('invalid-argument', 'One or more profile fields are too long.');
+  }
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new HttpsError('invalid-argument', 'Enter a valid contact email.');
+  }
+  await userRef.update({
+    name, phone, email,
+    profileComplete: phone.length > 0 || email.length > 0,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
   return { ok: true };
+});
+
+
+/** Converts an anonymous patient session into a permanent email/password account. */
+export const finalizeGuestAccountLink = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const provider = String(request.auth.token.firebase?.sign_in_provider ?? '');
+  const email = String(request.auth.token.email ?? '').trim().toLowerCase();
+  if (provider !== 'password' || !email) {
+    throw new HttpsError('failed-precondition', 'Link an email/password credential before completing account setup.');
+  }
+  const userRef = db.collection('users').doc(request.auth.uid);
+  await db.runTransaction(async (tx) => {
+    const userSnap = await tx.get(userRef);
+    if (!userSnap.exists) throw new HttpsError('failed-precondition', 'A guest profile is required.');
+    const user = userSnap.data()!;
+    if (String(user.roleId ?? user.role ?? '').toUpperCase() !== 'PATIENT') {
+      throw new HttpsError('permission-denied', 'Only patient guest accounts can be linked.');
+    }
+    // The guest email field may be a contact address; the linked Auth email becomes canonical.
+    tx.update(userRef, {
+      email,
+      isGuest: false,
+      profileComplete: String(user.name ?? '').trim().length > 0 && String(user.phone ?? '').trim().length > 0,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    tx.set(db.collection('clinics').doc(String(user.clinicId)).collection('audit_logs').doc(), {
+      clinicId: String(user.clinicId), entityType: 'patient', entityId: request.auth!.uid,
+      action: 'guest_account_linked', actorId: request.auth!.uid,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { ok: true };
+});
+
+
+/** Admin-only doctor catalog writes with clinic validation and audit history. */
+export const saveDoctor = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const name = required(request.data?.name, 'name');
+  const specialty = required(request.data?.specialty, 'specialty');
+  const durationMinutes = Number(request.data?.durationMinutes ?? 30);
+  const userId = String(request.data?.userId ?? '').trim();
+  const doctorId = String(request.data?.doctorId ?? '').trim();
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (name.length > 120 || specialty.length > 120 ||
+      !Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
+    throw new HttpsError('invalid-argument', 'Doctor details or appointment duration are invalid.');
+  }
+  const clinic = db.collection('clinics').doc(clinicId);
+  const doctorRef = doctorId ? clinic.collection('doctors').doc(doctorId) : clinic.collection('doctors').doc();
+  await db.runTransaction(async (tx) => {
+    if (userId) {
+      const userRef = db.collection('users').doc(userId);
+      const userSnap = await tx.get(userRef);
+      const userData = userSnap.data();
+      if (!userSnap.exists || String(userData?.clinicId ?? '') !== clinicId ||
+          String(userData?.roleId ?? userData?.role ?? '').toUpperCase() !== 'DOCTOR') {
+        throw new HttpsError('failed-precondition', 'Linked account must be a doctor in this clinic.');
+      }
+    }
+    const existing = await tx.get(doctorRef);
+    tx.set(doctorRef, {
+      name, specialty, durationMinutes,
+      ...(userId ? { userId } : {}),
+      active: request.data?.active !== false,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'doctor', entityId: doctorRef.id,
+      action: existing.exists ? 'updated' : 'created',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { doctorId: doctorRef.id };
+});
+
+/** Admin-only medical service writes; price is stored as a non-negative decimal. */
+export const saveMedicalService = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const name = required(request.data?.name, 'name');
+  const price = Number(request.data?.price);
+  const serviceId = String(request.data?.serviceId ?? '').trim();
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (name.length > 120 || !Number.isFinite(price) || price < 0 || price > 100000000) {
+    throw new HttpsError('invalid-argument', 'Service name or price is invalid.');
+  }
+  const clinic = db.collection('clinics').doc(clinicId);
+  const serviceRef = serviceId ? clinic.collection('services').doc(serviceId) : clinic.collection('services').doc();
+  await db.runTransaction(async (tx) => {
+    const existing = await tx.get(serviceRef);
+    tx.set(serviceRef, {
+      name, price,
+      active: request.data?.active !== false,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+    tx.set(clinic.collection('audit_logs').doc(), {
+      clinicId, entityType: 'service', entityId: serviceRef.id,
+      action: existing.exists ? 'updated' : 'created',
+      actorId: request.auth!.uid, timestamp: FieldValue.serverTimestamp(),
+    });
+  });
+  return { serviceId: serviceRef.id };
 });

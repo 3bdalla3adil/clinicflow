@@ -1,0 +1,361 @@
+name: ClinicFlow Release Builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        type: choice
+        required: true
+        default: both
+        options:
+          - android
+          - ios
+          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clinicflow-release-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  APP: medibook
+  ORG: com.medibook
+  FIREBASE_PROJECT_ID: clinic-app-v4
+  ANDROID_APP_ID: com.medibook.medibook
+  IOS_BUNDLE_ID: com.medibook.medibook
+
+jobs:
+  android:
+    name: Build and verify Android APK
+    if: inputs.platform == 'android' || inputs.platform == 'both'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files if missing
+        run: |
+          if [ ! -f android/gradlew ] || [ ! -f android/app/build.gradle.kts ]; then
+            flutter create --platforms=android --org "${ORG}" --project-name "${APP}" .
+          fi
+
+      - name: Configure and validate Firebase for Android
+        env:
+          FIREBASE_ANDROID_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_ANDROID_CONFIG}" || {
+            echo "::error::Set FIREBASE_GOOGLE_SERVICES_JSON_BASE64 in repository Actions secrets (raw JSON or Base64 is accepted)."
+            exit 1
+          }
+          mkdir -p android/app
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+
+          raw = os.environ["FIREBASE_ANDROID_CONFIG"].strip()
+          data = None
+          try:
+              decoded = base64.b64decode("".join(raw.split()), validate=True)
+              if decoded.lstrip().startswith(b"{"):
+                  data = json.loads(decoded.decode("utf-8"))
+          except Exception:
+              pass
+          if data is None:
+              data = json.loads(raw)
+
+          project_id = data.get("project_info", {}).get("project_id")
+          clients = data.get("client", [])
+          if project_id != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit(f"Expected Firebase project {os.environ['FIREBASE_PROJECT_ID']!r}, got {project_id!r}")
+          matching = []
+          for client in clients:
+              package_name = client.get("client_info", {}).get("android_client_info", {}).get("package_name")
+              if package_name == os.environ["ANDROID_APP_ID"]:
+                  matching.append(client)
+          if not matching:
+              found = [c.get("client_info", {}).get("android_client_info", {}).get("package_name") for c in clients]
+              raise SystemExit(f"google-services.json does not contain Android app ID {os.environ['ANDROID_APP_ID']!r}; found {found!r}")
+          Path("android/app/google-services.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print(f"Validated Android Firebase config: project={project_id}, app={os.environ['ANDROID_APP_ID']}")
+          PY
+
+      - name: Configure Google Services Gradle plugin
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          settings = Path("android/settings.gradle.kts")
+          app = Path("android/app/build.gradle.kts")
+          if not settings.exists() or not app.exists():
+              raise SystemExit("Expected Flutter Kotlin Gradle files were not generated")
+          s = settings.read_text()
+          if "com.google.gms.google-services" not in s:
+              marker = "plugins {"
+              if marker not in s:
+                  raise SystemExit("Could not find plugins block in android/settings.gradle.kts")
+              s = s.replace(marker, marker + '\n    id("com.google.gms.google-services") version "4.4.2" apply false', 1)
+              settings.write_text(s)
+          a = app.read_text()
+          if 'id("com.google.gms.google-services")' not in a:
+              marker = "plugins {"
+              if marker not in a:
+                  raise SystemExit("Could not find plugins block in android/app/build.gradle.kts")
+              a = a.replace(marker, marker + '\n    id("com.google.gms.google-services")', 1)
+              app.write_text(a)
+
+          # Ensure the generated app's Android identity matches the existing Firebase registration.
+          a = app.read_text()
+          import re
+          a, count = re.subn(r'applicationId\s*=\s*"[^"]+"', 'applicationId = "com.medibook.medibook"', a, count=1)
+          if count == 0:
+              raise SystemExit("Could not locate applicationId in android/app/build.gradle.kts")
+          a, _ = re.subn(r'namespace\s*=\s*"[^"]+"', 'namespace = "com.medibook.medibook"', a, count=1)
+          app.write_text(a)
+          PY
+
+      - name: Install dependencies and generate localizations
+        run: |
+          flutter pub get
+          flutter gen-l10n
+
+      - name: Build release APK
+        run: flutter build apk --release --dart-define=ENABLE_DEMO_AUTH=false --dart-define=ENABLE_FIREBASE_AUTH=true
+
+      - name: Verify release APK
+        run: |
+          set -euo pipefail
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          test -s "$apk"
+          unzip -t "$apk"
+          apkanalyzer_bin="$(command -v apkanalyzer || true)"
+          if [ -z "$apkanalyzer_bin" ]; then
+            sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            apkanalyzer_bin="$(find "$sdk_root/cmdline-tools" -type f -name apkanalyzer -print -quit 2>/dev/null || true)"
+          fi
+          test -n "$apkanalyzer_bin" || {
+            echo "::error::Android SDK apkanalyzer was not found; cannot verify the APK application ID."
+            exit 1
+          }
+          app_id="$("$apkanalyzer_bin" manifest application-id "$apk")"
+          test "$app_id" = "$ANDROID_APP_ID" || {
+            echo "::error::Expected Android application ID $ANDROID_APP_ID, got $app_id"
+            exit 1
+          }
+          echo "Verified APK archive and application ID: $app_id"
+
+      - name: Package APK for download
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp build/app/outputs/flutter-apk/app-release.apk release-assets/clinicflow-release.apk
+          (cd release-assets && zip -q clinicflow-android-apk.zip clinicflow-release.apk)
+          unzip -t release-assets/clinicflow-android-apk.zip
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinicflow-release-apk
+          path: release-assets/clinicflow-android-apk.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  ios:
+    name: Build and verify unsigned iOS IPA
+    if: inputs.platform == 'ios' || inputs.platform == 'both'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate iOS platform files if missing
+        run: |
+          if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
+            flutter create --platforms=ios --org "${ORG}" --project-name "${APP}" .
+          fi
+
+      - name: Enforce existing iOS bundle identifier
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          if not project.exists():
+              raise SystemExit("iOS Xcode project was not generated")
+          source = project.read_text()
+          updated, count = re.subn(r"PRODUCT_BUNDLE_IDENTIFIER = [^;]+;", "PRODUCT_BUNDLE_IDENTIFIER = com.medibook.medibook;", source)
+          if count == 0:
+              raise SystemExit("Could not find PRODUCT_BUNDLE_IDENTIFIER settings in Xcode project")
+          project.write_text(updated)
+          print(f"Aligned {count} Xcode build setting(s) with com.medibook.medibook")
+          PY
+
+      - name: Configure and validate Firebase for iOS
+        env:
+          FIREBASE_IOS_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_IOS_CONFIG}" || {
+            echo "::error::Set FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 in repository Actions secrets (raw plist or Base64 is accepted)."
+            exit 1
+          }
+          mkdir -p ios/Runner
+          python3 - <<'PY'
+          import base64, os, plistlib
+          from pathlib import Path
+
+          raw = os.environ["FIREBASE_IOS_CONFIG"].strip()
+          data = raw.encode()
+          try:
+              decoded = base64.b64decode("".join(raw.split()), validate=True)
+              if decoded.lstrip().startswith(b"<?xml") or decoded.lstrip().startswith(b"bplist"):
+                  data = decoded
+          except Exception:
+              pass
+          config = plistlib.loads(data)
+          required = ("GOOGLE_APP_ID", "API_KEY", "PROJECT_ID", "BUNDLE_ID")
+          missing = [key for key in required if not config.get(key)]
+          if missing:
+              raise SystemExit("GoogleService-Info.plist is missing: " + ", ".join(missing))
+          if config["PROJECT_ID"] != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit(f"Expected Firebase project {os.environ['FIREBASE_PROJECT_ID']!r}, got {config['PROJECT_ID']!r}")
+          if config["BUNDLE_ID"] != os.environ["IOS_BUNDLE_ID"]:
+              raise SystemExit(f"Expected iOS bundle ID {os.environ['IOS_BUNDLE_ID']!r}, got {config['BUNDLE_ID']!r}")
+          Path("ios/Runner/GoogleService-Info.plist").write_bytes(data)
+          print(f"Validated iOS Firebase config: project={config['PROJECT_ID']}, bundle={config['BUNDLE_ID']}")
+          PY
+
+          gem install xcodeproj --no-document
+          ruby <<'RUBY'
+          require 'xcodeproj'
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          target = project.targets.find { |t| t.name == 'Runner' } or abort('Runner target not found')
+          file_ref = project.main_group.find_file_by_path('Runner/GoogleService-Info.plist')
+          file_ref ||= project.main_group.new_file('Runner/GoogleService-Info.plist')
+          resources = target.resources_build_phase
+          resources.add_file_reference(file_ref, true) unless resources.files_references.include?(file_ref)
+          project.save
+          RUBY
+
+      - name: Install dependencies and generate localizations
+        run: |
+          flutter pub get
+          flutter gen-l10n
+
+      - name: Build unsigned IPA
+        run: flutter build ipa --release --no-codesign --dart-define=ENABLE_DEMO_AUTH=false --dart-define=ENABLE_FIREBASE_AUTH=true
+
+      - name: Verify unsigned IPA
+        run: |
+          set -euo pipefail
+          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
+          test -n "$ipa"
+          unzip -t "$ipa"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          unzip -q "$ipa" -d "$tmp"
+          test -s "$tmp/Payload/Runner.app/Info.plist"
+          python3 - "$tmp/Payload/Runner.app/Info.plist" "$tmp/Payload/Runner.app/GoogleService-Info.plist" <<'PY'
+          import os, plistlib, sys
+          with open(sys.argv[1], "rb") as stream:
+              info = plistlib.load(stream)
+          bundle_id = info.get("CFBundleIdentifier", "")
+          if bundle_id != os.environ["IOS_BUNDLE_ID"]:
+              raise SystemExit(f"Unexpected iOS bundle identifier: {bundle_id!r}")
+          if not os.path.isfile(sys.argv[2]):
+              raise SystemExit("GoogleService-Info.plist was not bundled into Runner.app")
+          print(f"Validated unsigned IPA bundle ID: {bundle_id}")
+          PY
+
+      - name: Package unsigned IPA for download
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
+          test -n "$ipa"
+          cp "$ipa" release-assets/clinicflow-ios-unsigned.ipa
+          (cd release-assets && zip -q clinicflow-ios-unsigned-ipa.zip clinicflow-ios-unsigned.ipa)
+          unzip -t release-assets/clinicflow-ios-unsigned-ipa.zip
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinicflow-release-ipa-unsigned
+          path: release-assets/clinicflow-ios-unsigned-ipa.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  prerelease-apk:
+    name: Publish Android APK prerelease
+    permissions:
+      contents: write
+    needs: android
+    if: always() && (inputs.platform == 'android' || inputs.platform == 'both') && needs.android.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: clinicflow-release-apk
+          path: release-assets
+
+      - name: Create Android prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: clinicflow-android-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ClinicFlow Android Prerelease ${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          files: release-assets/clinicflow-android-apk.zip
+          fail_on_unmatched_files: true
+
+  prerelease-ipa:
+    name: Publish iOS IPA prerelease
+    permissions:
+      contents: write
+    needs: ios
+    if: always() && (inputs.platform == 'ios' || inputs.platform == 'both') && needs.ios.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: clinicflow-release-ipa-unsigned
+          path: release-assets
+
+      - name: Create iOS IPA prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: clinicflow-ios-prerelease-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ClinicFlow iOS IPA Prerelease ${{ github.run_number }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          files: release-assets/clinicflow-ios-unsigned-ipa.zip
+          fail_on_unmatched_files: true

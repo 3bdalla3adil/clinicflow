@@ -3,22 +3,29 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 enum UserRole { admin, reception, doctor, accountant, patient }
 
 extension UserRoleX on UserRole {
-  static UserRole fromValue(String? value) => UserRole.values.firstWhere(
-        (role) => role.name == value,
-        orElse: () => UserRole.patient,
-      );
+  static UserRole fromValue(String? value) {
+    final normalized = value?.trim().toLowerCase();
+    return UserRole.values.firstWhere(
+      (role) => role.name == normalized,
+      orElse: () => UserRole.patient,
+    );
+  }
 }
 
 enum AppointmentStatus { scheduled, checkedIn, inConsultation, completed, cancelled, noShow }
 
 class AppUser {
-  const AppUser({required this.id, required this.email, required this.name, required this.role, required this.clinicId});
-  final String id, email, name, clinicId;
+  const AppUser({required this.id, required this.email, required this.name, required this.role, required this.clinicId, this.phone = '', this.isGuest = false, this.profileComplete = true});
+  final String id, email, name, clinicId, phone;
   final UserRole role;
+  final bool isGuest, profileComplete;
   factory AppUser.fromMap(String id, Map<String,dynamic> data, {String fallbackEmail=''}) => AppUser(
     id:id, email:(data['email'] as String?) ?? fallbackEmail,
     name:(data['name'] as String?) ?? 'ClinicFlow User',
-    role:UserRoleX.fromValue(data['role'] as String?),
+    phone:(data['phone'] as String?) ?? '',
+    isGuest:(data['isGuest'] as bool?) ?? false,
+    profileComplete:(data['profileComplete'] as bool?) ?? true,
+    role:UserRoleX.fromValue((data['roleId'] ?? data['role']) as String?),
     clinicId:(data['clinicId'] as String?) ?? '',
   );
 }

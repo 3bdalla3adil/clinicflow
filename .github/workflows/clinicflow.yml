@@ -1,35 +1,72 @@
-name: CI
+name: ClinicFlow CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/clinic-management-core]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.svg"
   pull_request:
-    branches: [main]
+    branches: [main, feature/clinic-management-core]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.svg"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  ORG: com.example
-  APP: clinicflow
+concurrency:
+  group: clinicflow-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ---------- Analyze + Test ----------
   analyze-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-      - run: flutter pub get
-      - run: flutter analyze
-      - run: flutter test
-      - name: GitHub Workflow Cleaner Action
-        uses: rokibhasansagar/slimhub_actions@v25.42.5
-
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Flutter dependencies
+        run: flutter pub get
+      - name: Generate localizations
+        run: flutter gen-l10n
+      - name: Analyze
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+      - run: flutter test --reporter expanded
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('functions/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+      - name: Install Cloud Functions dependencies
+        working-directory: functions
+        run: npm install --no-audit --no-fund
+      - name: Build Cloud Functions
+        working-directory: functions
+        run: npm run build
+      - name: Test Firestore security rules in Emulator
+        run: npx --yes firebase-tools emulators:exec --only firestore --project demo-clinicflow "npm --prefix functions run test:rules"
   # ---------- Android APK ----------
   build-apk:
     needs: analyze-and-test
@@ -72,7 +109,7 @@ jobs:
           name: app-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
 
   # ---------- iOS IPA (unsigned, for Sideloadly) ----------
   build-ipa:
@@ -110,3 +147,4 @@ jobs:
           name: app-release-ipa-unsigned
           path: app-release-unsigned.ipa
           if-no-files-found: error
+        

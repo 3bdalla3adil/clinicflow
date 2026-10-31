@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../models/models.dart';
 import 'demo_data.dart';
@@ -8,8 +9,11 @@ abstract interface class ClinicRepository {
   Stream<AppUser?> watchCurrentUser();
   AppUser? get currentUser;
   Future<void> signIn(String email, String password);
+  Future<void> sendPasswordReset(String email);
+  Future<void> linkGuestAccount(String email, String password);
   Future<void> signOut();
   Future<void> signInAsDemoGuest();
+  Future<void> startGuestSession(String clinicId);
   Future<List<Doctor>> getDoctors();
   Future<List<MedicalService>> getServices();
   Future<List<Appointment>> getAppointments({String? patientId});
@@ -55,6 +59,10 @@ class FirebaseClinicRepository implements ClinicRepository {
 
       final doc = await _firestore.collection('users').doc(u.uid).get();
       if (!doc.exists) {
+        if (u.isAnonymous) {
+          yield null;
+          continue;
+        }
         await _auth.signOut();
         throw StateError('Account is not provisioned in ClinicFlow.');
       }
@@ -110,15 +118,103 @@ class FirebaseClinicRepository implements ClinicRepository {
   }
 
   @override
+  Future<void> sendPasswordReset(String email) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty ||
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
+      throw ArgumentError('Enter a valid email address.');
+    }
+    await _auth.sendPasswordResetEmail(email: normalized);
+  }
+
+  @override
+  Future<void> linkGuestAccount(String email, String password) async {
+    final normalized = email.trim().toLowerCase();
+    if (normalized.isEmpty ||
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(normalized)) {
+      throw ArgumentError('Enter a valid email address.');
+    }
+    if (password.length < 8) {
+      throw ArgumentError('Password must be at least 8 characters.');
+    }
+
+    var user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Your guest session has expired. Sign in again.');
+    }
+
+    final hasPasswordProvider =
+        user.providerData.any((provider) => provider.providerId == 'password');
+    if (user.isAnonymous) {
+      final credential = EmailAuthProvider.credential(
+        email: normalized,
+        password: password,
+      );
+      final linked = await user.linkWithCredential(credential);
+      user = linked.user;
+      if (user == null) {
+        throw StateError('Firebase did not return the linked account.');
+      }
+    } else if (!hasPasswordProvider ||
+        (user.email ?? '').trim().toLowerCase() != normalized) {
+      throw StateError(
+        'This session is already linked to a different sign-in method or email.',
+      );
+    }
+
+    // Finalization is intentionally safe to retry. If the Auth link succeeds
+    // but the callable request fails, a second attempt resumes from this point
+    // rather than trying to link the credential a second time.
+    await user.getIdToken(true);
+    await FirebaseFunctions.instance
+        .httpsCallable('finalizeGuestAccountLink')
+        .call();
+
+    final profile = await _firestore.collection('users').doc(user.uid).get();
+    final data = profile.data();
+    if (!profile.exists || data == null) {
+      throw StateError('The linked account profile could not be loaded.');
+    }
+    _currentUser = AppUser.fromMap(
+      user.uid,
+      data,
+      fallbackEmail: user.email ?? normalized,
+    );
+    _clinicId = _currentUser!.clinicId;
+  }
+
+  @override
   Future<void> signOut() async {
+    await _auth.signOut();
     _currentUser = null;
     _clinicId = null;
-    await _auth.signOut();
   }
 
   @override
   Future<void> signInAsDemoGuest() async {
     throw UnsupportedError('Demo guest sign-in is only available in demo mode.');
+  }
+
+  @override
+  Future<void> startGuestSession(String clinicId) async {
+    final credential = await _auth.signInAnonymously();
+    try {
+      await FirebaseFunctions.instance.httpsCallable('startGuestProfile').call({
+        'clinicId': clinicId,
+      });
+      final user = credential.user;
+      if (user == null) throw StateError('Guest authentication failed.');
+      final doc = await _firestore.collection('users').doc(user.uid).get();
+      final data = doc.data();
+      if (!doc.exists || data == null) {
+        throw StateError('Guest profile could not be initialized.');
+      }
+      _currentUser = AppUser.fromMap(user.uid, data, fallbackEmail: '');
+      _clinicId = clinicId;
+    } catch (_) {
+      await _auth.signOut();
+      rethrow;
+    }
   }
 
   @override
@@ -159,45 +255,49 @@ class FirebaseClinicRepository implements ClinicRepository {
       throw StateError('Sign in required.');
     }
 
-    final ref = _collection('appointments').doc();
-    final datePart = '${date.year}'
-        '${date.month.toString().padLeft(2, '0')}'
+    final timeParts = startTime.split(':');
+    if (timeParts.length != 2) {
+      throw ArgumentError.value(startTime, 'startTime', 'Expected HH:mm.');
+    }
+    final startMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
+    final endMinutes = startMinutes + doctor.durationMinutes;
+    if (endMinutes >= 24 * 60) {
+      throw ArgumentError('Appointment duration must finish before midnight.');
+    }
+    String formatMinutes(int value) =>
+        '${(value ~/ 60).toString().padLeft(2, '0')}:'
+        '${(value % 60).toString().padLeft(2, '0')}';
+
+    final datePart = '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
         '${date.day.toString().padLeft(2, '0')}';
-    final appointment = Appointment(
-      id: ref.id,
-      number: 'APT-$datePart-${DateTime.now().millisecondsSinceEpoch}',
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('createAppointment')
+        .call<Map<String, dynamic>>({
+      'clinicId': u.clinicId,
+      'patientId': u.id,
+      'doctorId': doctor.id,
+      'serviceId': service.id,
+      'appointmentDate': datePart,
+      'startTime': startTime,
+      'endTime': formatMinutes(endMinutes),
+    });
+    final id = result.data['appointmentId'] as String?;
+    if (id == null || id.isEmpty) {
+      throw StateError('The booking service did not return an appointment ID.');
+    }
+
+    final dateCompact = datePart.replaceAll('-', '');
+    return Appointment(
+      id: id,
+      number: 'APT-$dateCompact-${id.substring(0, id.length < 6 ? id.length : 6).toUpperCase()}',
       doctor: doctor,
       service: service,
-      date: date,
+      date: DateTime(date.year, date.month, date.day),
       startTime: startTime,
       status: AppointmentStatus.scheduled,
     );
-
-    await ref.set({
-      ...appointment.toMap(),
-      'patientId': u.id,
-      'clinicId': u.clinicId,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    return appointment;
   }
-}
-
-class DemoCredential {
-  const DemoCredential({
-    required this.role,
-    required this.name,
-    required this.email,
-    required this.password,
-    required this.userId,
-  });
-
-  final UserRole role;
-  final String name;
-  final String email;
-  final String password;
-  final String userId;
 }
 
 class DemoClinicRepository implements ClinicRepository {
@@ -220,11 +320,26 @@ class DemoClinicRepository implements ClinicRepository {
   }
 
   @override
+  Future<void> sendPasswordReset(String email) async {
+    throw UnsupportedError('Password recovery is unavailable in offline demo mode.');
+  }
+
+  @override
+  Future<void> linkGuestAccount(String email, String password) async {
+    throw UnsupportedError('Account linking is unavailable in offline demo mode.');
+  }
+
+  @override
   Future<void> signInAsDemoGuest() async {
     _user = DemoData.user;
     _appointments
       ..clear()
       ..addAll(DemoData.appointments());
+  }
+
+  @override
+  Future<void> startGuestSession(String clinicId) async {
+    throw UnsupportedError('Choose Try Demo for the offline sample environment.');
   }
 
   @override
@@ -250,10 +365,7 @@ class DemoClinicRepository implements ClinicRepository {
     required DateTime date,
     required String startTime,
   }) async {
-    if (_user == null) {
-      throw StateError('Enter demo mode first.');
-    }
-
+    if (_user == null) throw StateError('Enter demo mode first.');
     final datePart = date.toIso8601String().substring(0, 10).replaceAll('-', '');
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final appointment = Appointment(
