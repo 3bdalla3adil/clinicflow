@@ -24,6 +24,13 @@ on:
 permissions:
   contents: read
 
+env:
+  APP: medibook
+  ORG: com.medibook
+  FIREBASE_PROJECT_ID: clinic-app-v4
+  ANDROID_APP_ID: com.medibook.medibook
+  IOS_BUNDLE_ID: com.medibook.medibook
+
 concurrency:
   group: clinicflow-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -84,13 +91,87 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate Android platform
-        run: flutter create . --platforms=android --org ${{ env.ORG }} --project-name ${{ env.APP }}
-
-      - name: Add Firebase config (Android)
+      - name: Generate Android platform files if missing
         run: |
-          echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 -d > android/app/google-services.json
-          ls -la android/app/google-services.json
+          if [ ! -f android/gradlew ] || [ ! -f android/app/build.gradle.kts ]; then
+            flutter create --platforms=android --org "${ORG}" --project-name "${APP}" .
+          fi
+
+      - name: Configure and validate Firebase for Android
+        env:
+          FIREBASE_ANDROID_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_JSON_BASE64 || secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_ANDROID_CONFIG}" || {
+            echo "::error::Set FIREBASE_GOOGLE_SERVICES_JSON_BASE64 in repository Actions secrets (raw JSON or Base64 is accepted)."
+            exit 1
+          }
+          mkdir -p android/app
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+
+          raw = os.environ["FIREBASE_ANDROID_CONFIG"].strip()
+          data = None
+          try:
+              decoded = base64.b64decode("".join(raw.split()), validate=True)
+              if decoded.lstrip().startswith(b"{"):
+                  data = json.loads(decoded.decode("utf-8"))
+          except Exception:
+              pass
+          if data is None:
+              data = json.loads(raw)
+
+          project_id = data.get("project_info", {}).get("project_id")
+          clients = data.get("client", [])
+          if project_id != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit(f"Expected Firebase project {os.environ['FIREBASE_PROJECT_ID']!r}, got {project_id!r}")
+          matching = []
+          for client in clients:
+              package_name = client.get("client_info", {}).get("android_client_info", {}).get("package_name")
+              if package_name == os.environ["ANDROID_APP_ID"]:
+                  matching.append(client)
+          if not matching:
+              found = [c.get("client_info", {}).get("android_client_info", {}).get("package_name") for c in clients]
+              raise SystemExit(f"google-services.json does not contain Android app ID {os.environ['ANDROID_APP_ID']!r}; found {found!r}")
+          Path("android/app/google-services.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          print(f"Validated Android Firebase config: project={project_id}, app={os.environ['ANDROID_APP_ID']}")
+          PY
+
+      - name: Configure Google Services Gradle plugin
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          settings = Path("android/settings.gradle.kts")
+          app = Path("android/app/build.gradle.kts")
+          if not settings.exists() or not app.exists():
+              raise SystemExit("Expected Flutter Kotlin Gradle files were not generated")
+          s = settings.read_text()
+          if "com.google.gms.google-services" not in s:
+              marker = "plugins {"
+              if marker not in s:
+                  raise SystemExit("Could not find plugins block in android/settings.gradle.kts")
+              s = s.replace(marker, marker + '\n    id("com.google.gms.google-services") version "4.4.2" apply false', 1)
+              settings.write_text(s)
+          a = app.read_text()
+          if 'id("com.google.gms.google-services")' not in a:
+              marker = "plugins {"
+              if marker not in a:
+                  raise SystemExit("Could not find plugins block in android/app/build.gradle.kts")
+              a = a.replace(marker, marker + '\n    id("com.google.gms.google-services")', 1)
+              app.write_text(a)
+
+          # Ensure the generated app's Android identity matches the existing Firebase registration.
+          a = app.read_text()
+          import re
+          a, count = re.subn(r'applicationId\s*=\s*"[^"]+"', 'applicationId = "com.medibook.medibook"', a, count=1)
+          if count == 0:
+              raise SystemExit("Could not locate applicationId in android/app/build.gradle.kts")
+          a, _ = re.subn(r'namespace\s*=\s*"[^"]+"', 'namespace = "com.medibook.medibook"', a, count=1)
+          app.write_text(a)
+          PY
 
       - name: Install dependencies
         run: flutter pub get
@@ -123,11 +204,75 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Generate iOS platform
-        run: flutter create . --platforms=ios --org ${{ env.ORG }} --project-name ${{ env.APP }}
+      - name: Generate iOS platform files if missing
+        run: |
+          if [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
+            flutter create --platforms=ios --org "${ORG}" --project-name "${APP}" .
+          fi
 
-      - name: Add Firebase config
-        run: echo "${{ secrets.GOOGLE_SERVICE_INFO_PLIST }}" | base64 -d > ios/Runner/GoogleService-Info.plist
+      - name: Enforce existing iOS bundle identifier
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          if not project.exists():
+              raise SystemExit("iOS Xcode project was not generated")
+          source = project.read_text()
+          updated, count = re.subn(r"PRODUCT_BUNDLE_IDENTIFIER = [^;]+;", "PRODUCT_BUNDLE_IDENTIFIER = com.medibook.medibook;", source)
+          if count == 0:
+              raise SystemExit("Could not find PRODUCT_BUNDLE_IDENTIFIER settings in Xcode project")
+          project.write_text(updated)
+          print(f"Aligned {count} Xcode build setting(s) with com.medibook.medibook")
+          PY
+
+      - name: Configure and validate Firebase for iOS
+        env:
+          FIREBASE_IOS_CONFIG: ${{ secrets.CLINICFLOW_FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 || secrets.GOOGLE_SERVICE_INFO_PLIST }}
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_IOS_CONFIG}" || {
+            echo "::error::Set FIREBASE_GOOGLE_SERVICE_INFO_PLIST_BASE64 in repository Actions secrets (raw plist or Base64 is accepted)."
+            exit 1
+          }
+          mkdir -p ios/Runner
+          python3 - <<'PY'
+          import base64, os, plistlib
+          from pathlib import Path
+
+          raw = os.environ["FIREBASE_IOS_CONFIG"].strip()
+          data = raw.encode()
+          try:
+              decoded = base64.b64decode("".join(raw.split()), validate=True)
+              if decoded.lstrip().startswith(b"<?xml") or decoded.lstrip().startswith(b"bplist"):
+                  data = decoded
+          except Exception:
+              pass
+          config = plistlib.loads(data)
+          required = ("GOOGLE_APP_ID", "API_KEY", "PROJECT_ID", "BUNDLE_ID")
+          missing = [key for key in required if not config.get(key)]
+          if missing:
+              raise SystemExit("GoogleService-Info.plist is missing: " + ", ".join(missing))
+          if config["PROJECT_ID"] != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit(f"Expected Firebase project {os.environ['FIREBASE_PROJECT_ID']!r}, got {config['PROJECT_ID']!r}")
+          if config["BUNDLE_ID"] != os.environ["IOS_BUNDLE_ID"]:
+              raise SystemExit(f"Expected iOS bundle ID {os.environ['IOS_BUNDLE_ID']!r}, got {config['BUNDLE_ID']!r}")
+          Path("ios/Runner/GoogleService-Info.plist").write_bytes(data)
+          print(f"Validated iOS Firebase config: project={config['PROJECT_ID']}, bundle={config['BUNDLE_ID']}")
+          PY
+
+          gem install xcodeproj --no-document
+          ruby <<'RUBY'
+          require 'xcodeproj'
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          target = project.targets.find { |t| t.name == 'Runner' } or abort('Runner target not found')
+          file_ref = project.main_group.find_file_by_path('Runner/GoogleService-Info.plist')
+          file_ref ||= project.main_group.new_file('Runner/GoogleService-Info.plist')
+          resources = target.resources_build_phase
+          resources.add_file_reference(file_ref, true) unless resources.files_references.include?(file_ref)
+          project.save
+          RUBY
 
       - run: flutter pub get
 
