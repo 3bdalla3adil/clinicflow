@@ -2,7 +2,7 @@ name: ClinicFlow CI
 
 on:
   push:
-    branches: [main, feature/clinic-management-core, feature/authentication-navigation-hardening]
+    branches: [main, feature/clinic-management-core]
     paths-ignore:
       - "docs/**"
       - "**/*.md"
