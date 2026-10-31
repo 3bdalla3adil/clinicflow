@@ -26,6 +26,14 @@ class _GuestStartPageState extends ConsumerState<GuestStartPage> {
   }
 
   Future<void> _loadClinics() async {
+    if (!ref.read(firebaseAvailableProvider)) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Firebase is not configured in this build. Add the Firebase platform configuration and rebuild the app.';
+      });
+      return;
+    }
     try {
       final result = await FirebaseFunctions.instance
           .httpsCallable('listPublicClinics')
@@ -45,9 +53,18 @@ class _GuestStartPageState extends ConsumerState<GuestStartPage> {
       });
     } on FirebaseFunctionsException catch (e) {
       if (!mounted) return;
+      final message = switch (e.code) {
+        'not-found' =>
+          'The public clinic service is not deployed yet. Deploy the ClinicFlow Firebase Functions, then try again.',
+        'unavailable' || 'deadline-exceeded' =>
+          'The clinic service is temporarily unavailable. Check your connection and try again.',
+        'permission-denied' =>
+          'The app is not permitted to load public clinics. Check the deployed function configuration.',
+        _ => e.message ?? 'Unable to load clinics. Please try again later.',
+      };
       setState(() {
         _loading = false;
-        _error = e.message ?? 'Unable to load clinics. Please try again later.';
+        _error = message;
       });
     } catch (e) {
       if (!mounted) return;
