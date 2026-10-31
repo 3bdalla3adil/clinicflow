@@ -9,7 +9,7 @@ class ClinicFlowApp extends ConsumerWidget {
  const ClinicFlowApp({super.key});
  @override Widget build(BuildContext context, WidgetRef ref) {
   final s=ref.watch(appSettingsProvider);
-  return MaterialApp.router(title:'ClinicFlow',debugShowCheckedModeBanner:false,theme:clinicTheme(Brightness.light),darkTheme:clinicTheme(Brightness.dark),themeMode:s.themeMode,locale:s.localeCode==null?null:Locale(s.localeCode!),supportedLocales:const[Locale('en'),Locale('ar')],localizationsDelegates:GlobalMaterialLocalizations.delegates,routerConfig:ref.watch(routerProvider),builder:(context,child){
+  return MaterialApp.router(title:'ClinicFlow',debugShowCheckedModeBanner:false,theme:clinicTheme(Brightness.light),darkTheme:clinicTheme(Brightness.dark),themeMode:s.themeMode,locale:s.localeCode==null?null:Locale(s.localeCode!),supportedLocales:const[Locale('en'),Locale('ar')],localizationsDelegates:const [GlobalMaterialLocalizations.delegate, GlobalWidgetsLocalizations.delegate, GlobalCupertinoLocalizations.delegate],routerConfig:ref.watch(routerProvider),builder:(context,child){
    final media=MediaQuery.of(context);
    return MediaQuery(data:media.copyWith(textScaler:media.textScaler.clamp(minScaleFactor:s.textScale,maxScaleFactor:s.textScale)),child:Column(children:[const DemoBanner(),Expanded(child:child??const SizedBox.shrink())]));
   });
