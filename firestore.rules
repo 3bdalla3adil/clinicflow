@@ -44,7 +44,7 @@ service cloud.firestore {
 
     match /clinics/{clinicId} {
       allow read: if belongsToClinic(clinicId);
-      allow write: if hasRole('ADMIN') && belongsToClinic(clinicId);
+      // Catalog mutations are callable-only so every change is validated and audited.\n        allow write: if false;
 
       match /doctors/{doctorId} {
         allow read: if belongsToClinic(clinicId);
