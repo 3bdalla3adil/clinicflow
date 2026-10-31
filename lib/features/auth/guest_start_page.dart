@@ -88,7 +88,14 @@ class _GuestStartPageState extends ConsumerState<GuestStartPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(\n        title: const Text('Continue as guest'),\n        leading: IconButton(\n          tooltip: 'Back to sign in',\n          onPressed: _starting ? null : () => context.go('/login'),\n          icon: const Icon(Icons.arrow_back),\n        ),\n      ),
+      appBar: AppBar(
+        title: const Text('Continue as guest'),
+        leading: IconButton(
+          tooltip: 'Back to sign in',
+          onPressed: _starting ? null : () => context.go('/login'),
+          icon: const Icon(Icons.arrow_back),
+        ),
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 480),
