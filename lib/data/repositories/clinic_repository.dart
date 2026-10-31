@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -49,45 +51,69 @@ class FirebaseClinicRepository implements ClinicRepository {
   AppUser? get currentUser => _currentUser;
 
   @override
-  Stream<AppUser?> watchCurrentUser() async* {
-    await for (final firebaseUser in _auth.authStateChanges()) {
-      if (firebaseUser == null) {
-        _currentUser = null;
-        _clinicId = null;
-        yield null;
-        continue;
-      }
+  Stream<AppUser?> watchCurrentUser() {
+    // Keep the auth listener independent from the Firestore profile listener.
+    // A nested await-for on profile.snapshots() prevents the outer auth stream
+    // from seeing signOut until the profile stream closes.
+    late final StreamController<AppUser?> controller;
+    StreamSubscription<User?>? authSubscription;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? profileSubscription;
+    Future<void> authQueue = Future<void>.value();
 
-      // Listen to the profile document, not just a one-time read. Anonymous
-      // auth is created before startGuestProfile writes the user document;
-      // the snapshot stream therefore completes the guest session without
-      // leaving the dashboard stuck on a null/loading user.
-      final profile = _firestore.collection('users').doc(firebaseUser.uid);
-      await for (final snapshot in profile.snapshots()) {
-        if (!snapshot.exists || snapshot.data() == null) {
-          if (firebaseUser.isAnonymous) {
-            _currentUser = null;
-            _clinicId = null;
-            yield null;
-            continue;
-          }
-          await _auth.signOut();
-          _currentUser = null;
-          _clinicId = null;
-          yield null;
-          break;
-        }
+    controller = StreamController<AppUser?>(
+      onListen: () {
+        authSubscription = _auth.authStateChanges().listen((firebaseUser) {
+          authQueue = authQueue.then((_) async {
+            await profileSubscription?.cancel();
+            profileSubscription = null;
 
-        final user = AppUser.fromMap(
-          firebaseUser.uid,
-          snapshot.data()!,
-          fallbackEmail: firebaseUser.email ?? '',
-        );
-        _currentUser = user;
-        _clinicId = user.clinicId;
-        yield user;
-      }
-    }
+            if (firebaseUser == null) {
+              _currentUser = null;
+              _clinicId = null;
+              if (!controller.isClosed) controller.add(null);
+              return;
+            }
+
+            final profile = _firestore.collection('users').doc(firebaseUser.uid);
+            profileSubscription = profile.snapshots().listen(
+              (snapshot) {
+                final data = snapshot.data();
+                if (!snapshot.exists || data == null) {
+                  _currentUser = null;
+                  _clinicId = null;
+                  if (!controller.isClosed) controller.add(null);
+                  // A non-guest account without a provisioned profile is not
+                  // allowed to remain authenticated.
+                  if (!firebaseUser.isAnonymous) unawaited(_auth.signOut());
+                  return;
+                }
+
+                final user = AppUser.fromMap(
+                  firebaseUser.uid,
+                  data,
+                  fallbackEmail: firebaseUser.email ?? '',
+                );
+                _currentUser = user;
+                _clinicId = user.clinicId;
+                if (!controller.isClosed) controller.add(user);
+              },
+              onError: (Object error, StackTrace stackTrace) {
+                if (!controller.isClosed) controller.addError(error, stackTrace);
+              },
+            );
+          }).catchError((Object error, StackTrace stackTrace) {
+            if (!controller.isClosed) controller.addError(error, stackTrace);
+          });
+        }, onError: (Object error, StackTrace stackTrace) {
+          if (!controller.isClosed) controller.addError(error, stackTrace);
+        });
+      },
+      onCancel: () async {
+        await authSubscription?.cancel();
+        await profileSubscription?.cancel();
+      },
+    );
+    return controller.stream;
   }
 
   @override
