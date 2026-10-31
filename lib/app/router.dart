@@ -14,7 +14,7 @@ import '../features/staff/staff_workspace_page.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = _RouterRefresh();
-  ref.listen(currentUserProvider, (_, __) => refresh.notifyListeners());
+  ref.listen(currentUserProvider, (_, __) => refresh.refresh());
 
   final router = GoRouter(
     initialLocation: '/login',
@@ -78,4 +78,6 @@ final routerProvider = Provider<GoRouter>((ref) {
   return router;
 });
 
-class _RouterRefresh extends ChangeNotifier {}
+class _RouterRefresh extends ChangeNotifier {
+  void refresh() => notifyListeners();
+}
