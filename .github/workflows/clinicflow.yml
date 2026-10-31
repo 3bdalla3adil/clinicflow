@@ -308,45 +308,56 @@ jobs:
 
       - run: flutter pub get
 
-      - name: Build unsigned IPA
-        run: flutter build ipa --release --no-codesign
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
 
-      - name: Verify unsigned IPA
+      - name: Verify and package unsigned IPA
+        env:
+          IOS_BUNDLE_ID: ${{ env.IOS_BUNDLE_ID }}
+          FIREBASE_PROJECT_ID: ${{ env.FIREBASE_PROJECT_ID }}
         run: |
           set -euo pipefail
-          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
-          test -n "$ipa"
-          unzip -t "$ipa"
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-          unzip -q "$ipa" -d "$temp_dir"
-          python3 - "$temp_dir/Payload/Runner.app/Info.plist" "$temp_dir/Payload/Runner.app/GoogleService-Info.plist" <<'PY'
+          app_path="build/ios/iphoneos/Runner.app"
+          if [[ ! -d "$app_path" ]]; then
+            echo "::error::Flutter did not produce $app_path"
+            echo "Available iOS build outputs:"
+            find build/ios -maxdepth 4 -print 2>/dev/null | head -200 || true
+            exit 1
+          fi
+
+          python3 - "$app_path" <<'PY'
           import os
           import plistlib
           import sys
+          from pathlib import Path
 
-          with open(sys.argv[1], "rb") as stream:
+          app = Path(sys.argv[1])
+          info_path = app / "Info.plist"
+          firebase_path = app / "GoogleService-Info.plist"
+          if not info_path.is_file():
+              raise SystemExit("Runner.app/Info.plist is missing")
+          with info_path.open("rb") as stream:
               app_info = plistlib.load(stream)
-          if app_info.get("CFBundleIdentifier") != os.environ["IOS_BUNDLE_ID"]:
-              raise SystemExit(f"Unexpected app bundle ID: {app_info.get('CFBundleIdentifier')!r}")
-          if not os.path.isfile(sys.argv[2]):
+          actual_bundle = app_info.get("CFBundleIdentifier")
+          if actual_bundle != os.environ["IOS_BUNDLE_ID"]:
+              raise SystemExit(f"Unexpected app bundle ID: {actual_bundle!r}")
+          if not firebase_path.is_file():
               raise SystemExit("Firebase GoogleService-Info.plist is missing from Runner.app")
-          with open(sys.argv[2], "rb") as stream:
+          with firebase_path.open("rb") as stream:
               firebase = plistlib.load(stream)
           if firebase.get("PROJECT_ID") != os.environ["FIREBASE_PROJECT_ID"]:
               raise SystemExit("Bundled Firebase plist points to the wrong Firebase project")
           if firebase.get("BUNDLE_ID") != os.environ["IOS_BUNDLE_ID"]:
               raise SystemExit("Bundled Firebase plist has the wrong bundle ID")
-          print("Unsigned IPA archive, bundle ID, and Firebase configuration verified.")
+          print("Unsigned Runner.app and Firebase configuration verified.")
           PY
 
-      - name: Package unsigned IPA
-        run: |
           set -euo pipefail
+          mkdir -p release-assets/Payload
+          cp -R "$app_path" release-assets/Payload/Runner.app
+          (cd release-assets && zip -qry clinicflow-ios-unsigned.ipa Payload)
+          unzip -t release-assets/clinicflow-ios-unsigned.ipa
           mkdir -p release-assets
-          ipa="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' -size +0c -print -quit)"
-          test -n "$ipa"
-          cp "$ipa" release-assets/clinicflow-ios-unsigned.ipa
           (cd release-assets && zip -q clinicflow-ios-unsigned-ipa.zip clinicflow-ios-unsigned.ipa)
           unzip -t release-assets/clinicflow-ios-unsigned-ipa.zip
 
