@@ -93,7 +93,7 @@ class FirebaseClinicRepository implements ClinicRepository {
   @override
   Future<void> signIn(String email, String password) async {
     final credential = await _auth.signInWithEmailAndPassword(
-      email: email.trim(),
+      email: email.trim().toLowerCase(),
       password: password,
     );
 
