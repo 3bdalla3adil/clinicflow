@@ -30,7 +30,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       final user = session.valueOrNull;
 
       if (user == null && !isPublicRoute) return '/login';
-      if (user != null && state.matchedLocation == '/login') {
+      if (user != null && isPublicRoute) {
         return '/dashboard';
       }
       return null;
