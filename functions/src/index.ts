@@ -54,6 +54,125 @@ function assertAssignedDoctor(actor: { role: StaffRole; clinicId: string }, acto
   }
 }
 
+
+function clinicDateParts(timeZone: string, date = new Date()): { date: string; time: string } {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(date);
+  } catch {
+    throw new HttpsError('failed-precondition', 'The clinic timezone is invalid. Configure a valid IANA timezone.');
+  }
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return { date: `${value('year')}-${value('month')}-${value('day')}`, time: `${value('hour')}:${value('minute')}` };
+}
+
+function scheduleForDate(doctor: FirebaseFirestore.DocumentData, date: string): Array<{ startTime: string; endTime: string }> {
+  const override = doctor.scheduleOverrides?.[date];
+  if (Array.isArray(override)) return override;
+  if (Array.isArray(doctor.leaveDates) && doctor.leaveDates.includes(date)) return [];
+  const dayOfWeek = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+  if (!Array.isArray(doctor.weeklySchedule)) return [];
+  return doctor.weeklySchedule
+    .filter((entry: FirebaseFirestore.DocumentData) => Number(entry.dayOfWeek) === dayOfWeek)
+    .map((entry: FirebaseFirestore.DocumentData) => ({
+      startTime: String(entry.startTime ?? ''),
+      endTime: String(entry.endTime ?? ''),
+    }));
+}
+
+function isInsideSchedule(
+  doctor: FirebaseFirestore.DocumentData,
+  date: string,
+  startTime: string,
+  endTime: string,
+): boolean {
+  const start = timeToMinutes(startTime);
+  const end = timeToMinutes(endTime);
+  return scheduleForDate(doctor, date).some((window) =>
+    /^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.startTime) &&
+    /^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.endTime) &&
+    start >= timeToMinutes(window.startTime) &&
+    end <= timeToMinutes(window.endTime) &&
+    timeToMinutes(window.endTime) > timeToMinutes(window.startTime));
+}
+
+function appointmentDuration(service: FirebaseFirestore.DocumentData, doctor: FirebaseFirestore.DocumentData): number {
+  const duration = Number(service.durationMinutes ?? doctor.durationMinutes ?? 30);
+  if (!Number.isInteger(duration) || duration < 5 || duration > 480) {
+    throw new HttpsError('failed-precondition', 'The service appointment duration is not configured correctly.');
+  }
+  return duration;
+}
+
+/** Returns server-calculated appointment starts in the clinic's local timezone. */
+export const getAppointmentAvailability = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
+  const actor = await getActor(request.auth.uid);
+  requireRole(actor.role, ['ADMIN', 'RECEPTION', 'PATIENT']);
+  const clinicId = required(request.data?.clinicId, 'clinicId');
+  const doctorId = required(request.data?.doctorId, 'doctorId');
+  const serviceId = required(request.data?.serviceId, 'serviceId');
+  const appointmentDate = required(request.data?.appointmentDate, 'appointmentDate');
+  if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
+  if (!isValidCalendarDate(appointmentDate)) throw new HttpsError('invalid-argument', 'Appointment date is invalid.');
+
+  const clinicRef = db.collection('clinics').doc(clinicId);
+  const [clinicSnap, doctorSnap, serviceSnap] = await Promise.all([
+    clinicRef.get(),
+    clinicRef.collection('doctors').doc(doctorId).get(),
+    clinicRef.collection('services').doc(serviceId).get(),
+  ]);
+  if (!clinicSnap.exists || clinicSnap.data()?.active === false) throw new HttpsError('not-found', 'Clinic is unavailable.');
+  if (!doctorSnap.exists || doctorSnap.data()?.active === false) throw new HttpsError('not-found', 'Doctor is unavailable.');
+  if (!serviceSnap.exists || serviceSnap.data()?.active === false) throw new HttpsError('not-found', 'Service is unavailable.');
+
+  const clinic = clinicSnap.data()!;
+  const timezone = String(clinic.timezone ?? 'UTC');
+  const localNow = clinicDateParts(timezone);
+  if (appointmentDate < localNow.date || appointmentDate > (() => {
+    const d = new Date(`${localNow.date}T00:00:00.000Z`);
+    d.setUTCDate(d.getUTCDate() + 90);
+    return d.toISOString().slice(0, 10);
+  })()) throw new HttpsError('invalid-argument', 'Choose a date within the next 90 days.');
+
+  if (Array.isArray(clinic.holidays) && clinic.holidays.includes(appointmentDate)) return { slots: [], timezone };
+  const doctor = doctorSnap.data()!;
+  const service = serviceSnap.data()!;
+  const duration = appointmentDuration(service, doctor);
+  const interval = Number(doctor.slotIntervalMinutes ?? 15);
+  if (!Number.isInteger(interval) || interval < 5 || interval > 120) {
+    throw new HttpsError('failed-precondition', 'Doctor slot interval is not configured correctly.');
+  }
+  const booked = await clinicRef.collection('appointments')
+    .where('doctorId', '==', doctorId)
+    .where('appointmentDate', '==', appointmentDate).get();
+  const activeStatuses = new Set(['scheduled', 'checkedIn', 'inConsultation']);
+  const occupied = booked.docs
+    .filter((doc) => activeStatuses.has(String(doc.data().status ?? 'scheduled')))
+    .map((doc) => ({
+      start: timeToMinutes(String(doc.data().startTime ?? '00:00')),
+      end: timeToMinutes(String(doc.data().endTime ?? '00:00')),
+    }));
+  const slots: Array<{ startTime: string; endTime: string; durationMinutes: number }> = [];
+  const format = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  for (const window of scheduleForDate(doctor, appointmentDate)) {
+    if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.startTime) ||
+        !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.endTime)) continue;
+    const windowStart = timeToMinutes(window.startTime);
+    const windowEnd = timeToMinutes(window.endTime);
+    for (let start = windowStart; start + duration <= windowEnd; start += interval) {
+      const end = start + duration;
+      if (appointmentDate === localNow.date && start <= timeToMinutes(localNow.time)) continue;
+      if (occupied.some((booking) => start < booking.end && booking.start < end)) continue;
+      slots.push({ startTime: format(start), endTime: format(end), durationMinutes: duration });
+    }
+  }
+  return { slots, timezone };
+});
+
 /** All bookings go through this transaction; clients cannot self-assign a clinic or patient. */
 export const createAppointment = onCall(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign-in is required.');
@@ -88,6 +207,30 @@ export const createAppointment = onCall(async (request) => {
   const userRef = db.collection('users').doc(patientId);
   const startMinute = timeToMinutes(startTime);
   const endMinute = timeToMinutes(endTime);
+  const clinicRef = db.collection('clinics').doc(clinicId);
+  const [initialDoctor, initialService, initialClinic] = await Promise.all([
+    clinicRef.collection('doctors').doc(doctorId).get(),
+    clinicRef.collection('services').doc(serviceId).get(),
+    clinicRef.get(),
+  ]);
+  if (!initialDoctor.exists || initialDoctor.data()?.active === false) throw new HttpsError('not-found', 'Doctor is unavailable.');
+  if (!initialService.exists || initialService.data()?.active === false) throw new HttpsError('not-found', 'Service is unavailable.');
+  if (!initialClinic.exists || initialClinic.data()?.active === false) throw new HttpsError('not-found', 'Clinic is unavailable.');
+  const duration = appointmentDuration(initialService.data()!, initialDoctor.data()!);
+  if (endMinute - startMinute !== duration) throw new HttpsError('invalid-argument', 'Appointment duration must match the selected service.');
+  const timezone = String(initialClinic.data()?.timezone ?? 'UTC');
+  const localNow = clinicDateParts(timezone);
+  const latestDate = new Date(`${localNow.date}T00:00:00.000Z`);
+  latestDate.setUTCDate(latestDate.getUTCDate() + 90);
+  if (appointmentDate < localNow.date || appointmentDate > latestDate.toISOString().slice(0, 10)) {
+    throw new HttpsError('failed-precondition', 'Appointments must be booked within the next 90 days.');
+  }
+  if (Array.isArray(initialClinic.data()?.holidays) && initialClinic.data()!.holidays.includes(appointmentDate)) {
+    throw new HttpsError('failed-precondition', 'The clinic is closed on this date.');
+  }
+  if (!isInsideSchedule(initialDoctor.data()!, appointmentDate, startTime, endTime)) {
+    throw new HttpsError('failed-precondition', 'The selected time is outside the doctor\'s published availability.');
+  }
   // One lock per minute prevents concurrent bookings with different but overlapping start times.
   const slotRefs = Array.from({ length: endMinute - startMinute }, (_, offset) => {
     const minute = startMinute + offset;
@@ -140,6 +283,11 @@ export const createAppointment = onCall(async (request) => {
 
     const doctor = doctorSnap.data()!;
     const service = serviceSnap.data()!;
+    if (doctor.active === false || service.active === false ||
+        appointmentDuration(service, doctor) !== duration ||
+        !isInsideSchedule(doctor, appointmentDate, startTime, endTime)) {
+      throw new HttpsError('failed-precondition', 'The doctor schedule or service changed. Refresh availability and try again.');
+    }
     const date = new Date(`${appointmentDate}T00:00:00.000Z`);
     tx.set(appointmentRef, {
       appointmentId: appointmentRef.id,
