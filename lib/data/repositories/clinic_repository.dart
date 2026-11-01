@@ -19,6 +19,11 @@ abstract interface class ClinicRepository {
   Future<void> startGuestSession(String clinicId);
   Future<List<Doctor>> getDoctors();
   Future<List<MedicalService>> getServices();
+  Future<List<AppointmentSlot>> getAppointmentAvailability({
+    required Doctor doctor,
+    required MedicalService service,
+    required DateTime date,
+  });
   Future<List<Appointment>> getAppointments({String? patientId});
   Future<Appointment> createAppointment({
     required Doctor doctor,
@@ -296,6 +301,33 @@ class FirebaseClinicRepository implements ClinicRepository {
   }
 
   @override
+  Future<List<AppointmentSlot>> getAppointmentAvailability({
+    required Doctor doctor,
+    required MedicalService service,
+    required DateTime date,
+  }) async {
+    final user = _currentUser;
+    if (user == null) throw StateError('Sign in required.');
+    final datePart = '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+    final result = await FirebaseFunctions.instance
+        .httpsCallable('getAppointmentAvailability')
+        .call<Map<String, dynamic>>({
+      'clinicId': user.clinicId,
+      'doctorId': doctor.id,
+      'serviceId': service.id,
+      'appointmentDate': datePart,
+    });
+    final rawSlots = result.data['slots'];
+    if (rawSlots is! List) throw StateError('Availability service returned an invalid response.');
+    return rawSlots
+        .whereType<Map>()
+        .map((slot) => AppointmentSlot.fromMap(Map<String, dynamic>.from(slot)))
+        .toList(growable: false);
+  }
+
+  @override
   Future<List<Appointment>> getAppointments({String? patientId}) async {
     Query<Map<String, dynamic>> q = _collection('appointments');
     if (patientId != null) {
@@ -322,7 +354,8 @@ class FirebaseClinicRepository implements ClinicRepository {
       throw ArgumentError.value(startTime, 'startTime', 'Expected HH:mm.');
     }
     final startMinutes = int.parse(timeParts[0]) * 60 + int.parse(timeParts[1]);
-    final endMinutes = startMinutes + doctor.durationMinutes;
+    final durationMinutes = service.durationMinutes ?? doctor.durationMinutes;
+    final endMinutes = startMinutes + durationMinutes;
     if (endMinutes >= 24 * 60) {
       throw ArgumentError('Appointment duration must finish before midnight.');
     }
@@ -420,6 +453,41 @@ class DemoClinicRepository implements ClinicRepository {
 
   @override
   Future<List<MedicalService>> getServices() async => DemoData.services;
+
+  @override
+  Future<List<AppointmentSlot>> getAppointmentAvailability({
+    required Doctor doctor,
+    required MedicalService service,
+    required DateTime date,
+  }) async {
+    if (_user == null) throw StateError('Enter demo mode first.');
+    final duration = service.durationMinutes ?? doctor.durationMinutes;
+    final windows = <(int, int)>[(9 * 60, 12 * 60), (14 * 60, 17 * 60)];
+    final slots = <AppointmentSlot>[];
+    String format(int minutes) =>
+        '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+    for (final window in windows) {
+      for (var start = window.$1; start + duration <= window.$2; start += 30) {
+        final overlaps = _appointments.any((appointment) {
+          if (appointment.doctor.id != doctor.id ||
+              appointment.date.year != date.year ||
+              appointment.date.month != date.month ||
+              appointment.date.day != date.day ||
+              appointment.status == AppointmentStatus.cancelled ||
+              appointment.status == AppointmentStatus.completed ||
+              appointment.status == AppointmentStatus.noShow) return false;
+          final parts = appointment.startTime.split(':').map(int.parse).toList();
+          final existingStart = parts[0] * 60 + parts[1];
+          final existingEnd = existingStart + (appointment.service.durationMinutes ?? appointment.doctor.durationMinutes);
+          return start < existingEnd && existingStart < start + duration;
+        });
+        if (!overlaps) slots.add(AppointmentSlot(
+          startTime: format(start), endTime: format(start + duration), durationMinutes: duration,
+        ));
+      }
+    }
+    return slots;
+  }
 
   @override
   Future<List<Appointment>> getAppointments({String? patientId}) async =>
