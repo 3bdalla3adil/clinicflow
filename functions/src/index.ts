@@ -207,13 +207,28 @@ export const createAppointment = onCall(async (request) => {
   });
 
   await db.runTransaction(async (tx) => {
-    const [doctorSnap, serviceSnap, patientSnap, existingAppointments, ...slotSnaps] = await Promise.all([
-      tx.get(doctorRef), tx.get(serviceRef), tx.get(userRef),
+    const [doctorSnap, serviceSnap, clinicSnap, patientSnap, existingAppointments, ...slotSnaps] = await Promise.all([
+      tx.get(doctorRef), tx.get(serviceRef), tx.get(clinicRef), tx.get(userRef),
       tx.get(appointments.where('doctorId', '==', doctorId).where('appointmentDate', '==', appointmentDate)),
       ...slotRefs.map((ref) => tx.get(ref)),
     ]);
-    if (!doctorSnap.exists) throw new HttpsError('not-found', 'Doctor was not found in this clinic.');
-    if (!serviceSnap.exists) throw new HttpsError('not-found', 'Service was not found in this clinic.');
+    if (!doctorSnap.exists || doctorSnap.data()?.active === false) throw new HttpsError('not-found', 'Doctor was not found or is inactive.');
+    if (!serviceSnap.exists || serviceSnap.data()?.active === false) throw new HttpsError('not-found', 'Service was not found or is inactive.');
+    if (!clinicSnap.exists || clinicSnap.data()?.active === false) throw new HttpsError('not-found', 'Clinic is unavailable.');
+    const transactionClinic = clinicSnap.data()!;
+    const transactionTimezone = String(transactionClinic.timezone ?? '');
+    if (!transactionTimezone) throw new HttpsError('failed-precondition', 'Configure the clinic IANA timezone before accepting bookings.');
+    const transactionNow = clinicDateParts(transactionTimezone);
+    const transactionLatestDate = new Date(`${transactionNow.date}T00:00:00.000Z`);
+    transactionLatestDate.setUTCDate(transactionLatestDate.getUTCDate() + 90);
+    if (appointmentDate < transactionNow.date ||
+        appointmentDate > transactionLatestDate.toISOString().slice(0, 10) ||
+        (appointmentDate === transactionNow.date && startMinute <= timeToMinutes(transactionNow.time))) {
+      throw new HttpsError('failed-precondition', 'Appointments must be in the future and within the next 90 days.');
+    }
+    if (Array.isArray(transactionClinic.holidays) && transactionClinic.holidays.includes(appointmentDate)) {
+      throw new HttpsError('failed-precondition', 'The clinic is closed on this date.');
+    }
     if (!patientSnap.exists) throw new HttpsError('not-found', 'Patient profile was not found.');
     const patientData = patientSnap.data()!;
     if (String(patientData.clinicId ?? '') !== clinicId ||
