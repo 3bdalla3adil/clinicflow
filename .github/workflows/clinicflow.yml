@@ -72,6 +72,9 @@ jobs:
       - name: Build Cloud Functions
         working-directory: functions
         run: npm run build
+      - name: Test appointment scheduling rules
+        working-directory: functions
+        run: npm run test:scheduling
       - name: Test Firestore security rules in Emulator
         run: npx --yes firebase-tools emulators:exec --only firestore --project demo-clinicflow "npm --prefix functions run test:rules"
   # ---------- Android APK ----------

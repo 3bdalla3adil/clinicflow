@@ -5,7 +5,7 @@ ClinicFlow is a Flutter + Firebase clinic-management MVP for Android and iOS. It
 ## Current capabilities
 
 - Firebase email/password sign-in and isolated local demo mode.
-- Patient appointment booking and appointment history.
+- Patient appointment booking with server-calculated availability, clinic-local timezone handling, schedule/holiday/leave checks, and transaction-protected overlap prevention; appointment history.
 - Anonymous guest entry with clinic selection; guests can book first and add their name/contact details later from My Profile.
 - Role-aware dashboard and staff appointment workspace.
 - Reception check-in, doctor consultation workflow and clinical notes, and payment recording.
@@ -22,7 +22,7 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
 2. Configure the existing Firebase project `clinic-app-v4` with FlutterFire CLI. Generate `lib/firebase_options.dart` locally if the project setup uses generated FlutterFire options; do not commit private service-account credentials.
 3. Enable Email/Password Authentication and Firestore.
 4. Enable **Anonymous** as well as Email/Password Authentication. Provision staff and registered users' `users/{uid}` profiles using a trusted administrative process. Guest patient profiles are created by the callable function. Do not let clients choose their own role or clinic.
-5. Seed each clinic with doctor and service documents.
+5. Configure each clinic's IANA `timezone` (for example `Asia/Riyadh`) and seed doctor schedules and service durations using the scheduling contract below.
 6. Deploy Firestore rules, indexes, and callable functions from the repository root:
 
    ```bash
@@ -33,6 +33,29 @@ Roles supported by the data model: `ADMIN`, `RECEPTION`, `DOCTOR`, `ACCOUNTANT`,
 
 The guest flow lists available clinics, creates a Firebase anonymous session, and provisions a minimum patient profile on the server. Guests can book before completing their contact details. From My Profile, they can link an email/password credential to preserve the same Firebase UID and patient history. Password reset is available from the sign-in screen. Enable Anonymous Authentication in Firebase Console. The callable booking function validates clinic scope and profile ownership and reserves a slot in a Firestore transaction. Clients should not be granted direct write access to appointments, slot locks, consultations, payments, or audit logs.
 
+### Appointment scheduling data contract
+
+The booking API is intentionally fail-closed: a clinic must have a valid IANA `timezone` before accepting bookings. Doctor documents under `clinics/{clinicId}/doctors/{doctorId}` publish a weekly schedule using JavaScript weekday numbers (Sunday = 0 through Saturday = 6):
+
+```json
+{
+  "active": true,
+  "durationMinutes": 30,
+  "slotIntervalMinutes": 15,
+  "weeklySchedule": [
+    { "dayOfWeek": 0, "startTime": "09:00", "endTime": "13:00" },
+    { "dayOfWeek": 2, "startTime": "14:00", "endTime": "18:00" }
+  ],
+  "leaveDates": ["2026-12-01"],
+  "scheduleOverrides": {
+    "2026-12-02": [
+      { "startTime": "10:00", "endTime": "14:00" }
+    ]
+  }
+}
+```
+
+Service documents may specify `durationMinutes`; when omitted, the doctor's `durationMinutes` is used. Clinic documents may include `holidays: ["YYYY-MM-DD"]`. A date-specific `scheduleOverrides` array replaces the weekly schedule for that date; an empty array closes the doctor for that date. Date and time values are clinic-local wall-clock values. The callable function calculates availability and booking duration from trusted Firestore configuration; client-provided duration, price, or schedule is not authoritative. Existing active appointments are excluded and the booking transaction revalidates the schedule and reserves minute-level slot locks. Configure these fields before enabling real booking.
 ## Run and test
 
 ```bash

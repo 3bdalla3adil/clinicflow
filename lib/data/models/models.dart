@@ -38,10 +38,33 @@ class Doctor {
 }
 
 class MedicalService {
-  const MedicalService({required this.id,required this.name,required this.price});
-  final String id,name; final double price;
-  factory MedicalService.fromMap(String id,Map<String,dynamic> d)=>MedicalService(id:id,name:(d['name'] as String?)??'',price:(d['price'] as num?)?.toDouble()??0);
-  Map<String,dynamic> toMap()=>{'name':name,'price':price};
+  const MedicalService({required this.id, required this.name, required this.price, this.durationMinutes});
+  final String id, name;
+  final double price;
+  final int? durationMinutes;
+  factory MedicalService.fromMap(String id, Map<String, dynamic> d) => MedicalService(
+    id: id,
+    name: (d['name'] as String?) ?? '',
+    price: (d['price'] as num?)?.toDouble() ?? 0,
+    durationMinutes: (d['durationMinutes'] as num?)?.toInt(),
+  );
+  Map<String, dynamic> toMap() => {
+    'name': name,
+    'price': price,
+    if (durationMinutes != null) 'durationMinutes': durationMinutes,
+  };
+}
+
+class AppointmentSlot {
+  const AppointmentSlot({required this.startTime, required this.endTime, required this.durationMinutes});
+  final String startTime;
+  final String endTime;
+  final int durationMinutes;
+  factory AppointmentSlot.fromMap(Map<String, dynamic> data) => AppointmentSlot(
+    startTime: data['startTime'] as String,
+    endTime: data['endTime'] as String,
+    durationMinutes: (data['durationMinutes'] as num).toInt(),
+  );
 }
 
 class Appointment {
