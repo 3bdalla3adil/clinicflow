@@ -46,6 +46,7 @@ Bring the functional MediBook patient, doctor, and administrator workflows into 
 - Fix guest-account linking retry behavior and account recovery edge cases.
 - Verify callable-function authorization and Firestore rules with emulator tests.
 - Add deterministic tests for appointment concurrency and state transitions.
+- Replace hard-coded booking times with server-calculated availability from clinic timezone, doctor weekly schedules, date overrides, leave, holidays, service duration, and active bookings; revalidate all constraints inside the booking transaction.
 - Verify Flutter analyze, widget/unit tests, Functions build, and emulator rules in CI.
 - Resolve the current CI failures before adding more modules.
 
