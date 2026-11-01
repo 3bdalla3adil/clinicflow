@@ -96,7 +96,10 @@ function isInsideSchedule(
     /^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.endTime) &&
     start >= timeToMinutes(window.startTime) &&
     end <= timeToMinutes(window.endTime) &&
-    timeToMinutes(window.endTime) > timeToMinutes(window.startTime));
+    timeToMinutes(window.endTime) > timeToMinutes(window.startTime) &&
+    Number.isInteger(Number(doctor.slotIntervalMinutes ?? 15)) &&
+    Number(doctor.slotIntervalMinutes ?? 15) >= 5 &&
+    (start - timeToMinutes(window.startTime)) % Number(doctor.slotIntervalMinutes ?? 15) === 0);
 }
 
 function appointmentDuration(service: FirebaseFirestore.DocumentData, doctor: FirebaseFirestore.DocumentData): number {
@@ -130,7 +133,8 @@ export const getAppointmentAvailability = onCall(async (request) => {
   if (!serviceSnap.exists || serviceSnap.data()?.active === false) throw new HttpsError('not-found', 'Service is unavailable.');
 
   const clinic = clinicSnap.data()!;
-  const timezone = String(clinic.timezone ?? 'UTC');
+  const timezone = String(clinic.timezone ?? '');
+  if (!timezone) throw new HttpsError('failed-precondition', 'Configure the clinic IANA timezone before accepting bookings.');
   const localNow = clinicDateParts(timezone);
   if (appointmentDate < localNow.date || appointmentDate > (() => {
     const d = new Date(`${localNow.date}T00:00:00.000Z`);
@@ -218,12 +222,14 @@ export const createAppointment = onCall(async (request) => {
   if (!initialClinic.exists || initialClinic.data()?.active === false) throw new HttpsError('not-found', 'Clinic is unavailable.');
   const duration = appointmentDuration(initialService.data()!, initialDoctor.data()!);
   if (endMinute - startMinute !== duration) throw new HttpsError('invalid-argument', 'Appointment duration must match the selected service.');
-  const timezone = String(initialClinic.data()?.timezone ?? 'UTC');
+  const timezone = String(initialClinic.data()?.timezone ?? '');
+  if (!timezone) throw new HttpsError('failed-precondition', 'Configure the clinic IANA timezone before accepting bookings.');
   const localNow = clinicDateParts(timezone);
   const latestDate = new Date(`${localNow.date}T00:00:00.000Z`);
   latestDate.setUTCDate(latestDate.getUTCDate() + 90);
-  if (appointmentDate < localNow.date || appointmentDate > latestDate.toISOString().slice(0, 10)) {
-    throw new HttpsError('failed-precondition', 'Appointments must be booked within the next 90 days.');
+  if (appointmentDate < localNow.date || appointmentDate > latestDate.toISOString().slice(0, 10) ||
+      (appointmentDate === localNow.date && startMinute <= timeToMinutes(localNow.time))) {
+    throw new HttpsError('failed-precondition', 'Appointments must be in the future and within the next 90 days.');
   }
   if (Array.isArray(initialClinic.data()?.holidays) && initialClinic.data()!.holidays.includes(appointmentDate)) {
     throw new HttpsError('failed-precondition', 'The clinic is closed on this date.');
