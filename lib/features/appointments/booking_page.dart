@@ -16,10 +16,33 @@ class _BookingPageState extends ConsumerState<BookingPage> {
   Doctor? doctor;
   MedicalService? service;
   DateTime date = DateTime.now();
-  String time = '10:00';
+  AppointmentSlot? selectedSlot;
+  Future<List<AppointmentSlot>>? availabilityFuture;
+  bool submitting = false;
+
+  String _datePart(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+
+  void _refreshAvailability() {
+    setState(() {
+      selectedSlot = null;
+      final selectedDoctor = doctor;
+      final selectedService = service;
+      availabilityFuture = selectedDoctor == null || selectedService == null
+          ? null
+          : ref.read(clinicRepositoryProvider).getAppointmentAvailability(
+                doctor: selectedDoctor,
+                service: selectedService,
+                date: date,
+              );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final availability = availabilityFuture;
     return Scaffold(
       appBar: AppBar(title: const Text('Book appointment')),
       body: ListView(
@@ -28,89 +51,133 @@ class _BookingPageState extends ConsumerState<BookingPage> {
           const Text('1. Select service'),
           const SizedBox(height: 8),
           ref.watch(servicesProvider).when(
-                data: (xs) => DropdownButtonFormField<MedicalService>(
+                data: (items) => DropdownButtonFormField<MedicalService>(
                   initialValue: service,
-                  items: xs
-                      .map(
-                        (x) => DropdownMenuItem<MedicalService>(
-                          value: x,
-                          child: Text(
-                            '${x.name} · ${x.price.toStringAsFixed(0)}',
-                          ),
-                        ),
-                      )
+                  isExpanded: true,
+                  items: items
+                      .where((item) => item.id.isNotEmpty)
+                      .map((item) => DropdownMenuItem<MedicalService>(
+                            value: item,
+                            child: Text(
+                              '${item.name} · ${item.price.toStringAsFixed(2)}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ))
                       .toList(),
-                  onChanged: (x) => setState(() => service = x),
+                  onChanged: (value) {
+                    service = value;
+                    _refreshAvailability();
+                  },
                   decoration: const InputDecoration(labelText: 'Service'),
                 ),
                 loading: () => const LinearProgressIndicator(),
-                error: (e, _) => Text('Unable to load services: $e'),
+                error: (error, _) => Text('Unable to load services: $error'),
               ),
           const SizedBox(height: 20),
           const Text('2. Select doctor'),
           const SizedBox(height: 8),
           ref.watch(doctorsProvider).when(
-                data: (xs) => DropdownButtonFormField<Doctor>(
+                data: (items) => DropdownButtonFormField<Doctor>(
                   initialValue: doctor,
-                  items: xs
-                      .map(
-                        (x) => DropdownMenuItem<Doctor>(
-                          value: x,
-                          child: Text('${x.name} · ${x.specialty}'),
-                        ),
-                      )
+                  isExpanded: true,
+                  items: items
+                      .where((item) => item.id.isNotEmpty)
+                      .map((item) => DropdownMenuItem<Doctor>(
+                            value: item,
+                            child: Text(
+                              '${item.name} · ${item.specialty}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ))
                       .toList(),
-                  onChanged: (x) => setState(() => doctor = x),
+                  onChanged: (value) {
+                    doctor = value;
+                    _refreshAvailability();
+                  },
                   decoration: const InputDecoration(labelText: 'Doctor'),
                 ),
                 loading: () => const LinearProgressIndicator(),
-                error: (e, _) => Text('Unable to load doctors: $e'),
+                error: (error, _) => Text('Unable to load doctors: $error'),
               ),
           const SizedBox(height: 20),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Date'),
-            subtitle: Text('${date.day}/${date.month}/${date.year}'),
+            title: const Text('3. Choose date'),
+            subtitle: Text(_datePart(date)),
             trailing: OutlinedButton(
               onPressed: () async {
+                final today = DateUtils.dateOnly(DateTime.now());
                 final selected = await showDatePicker(
                   context: context,
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime.now().add(const Duration(days: 90)),
-                  initialDate: date,
+                  firstDate: today,
+                  lastDate: today.add(const Duration(days: 90)),
+                  initialDate: date.isBefore(today) ? today : date,
                 );
                 if (selected != null) {
-                  setState(() => date = selected);
+                  date = selected;
+                  _refreshAvailability();
                 }
               },
               child: const Text('Choose'),
             ),
           ),
           const SizedBox(height: 8),
-          const Text('4. Available time'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              '09:00',
-              '10:00',
-              '11:00',
-              '14:00',
-            ]
-                .map<Widget>(
-                  (x) => ChoiceChip(
-                    label: Text(x),
-                    selected: x == time,
-                    onSelected: (_) => setState(() => time = x),
-                  ),
-                )
-                .toList(),
+          const Text('4. Available appointment times'),
+          const SizedBox(height: 4),
+          Text(
+            'Times are displayed in the clinic\'s local timezone. Availability is checked by the booking server.',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
+          const SizedBox(height: 12),
+          if (doctor == null || service == null)
+            const Text('Select a service and doctor to see available times.')
+          else if (availability == null)
+            const Text('Select a date to check availability.')
+          else
+            FutureBuilder<List<AppointmentSlot>>(
+              future: availability,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Unable to check availability: ${snapshot.error}'),
+                      TextButton(
+                        onPressed: _refreshAvailability,
+                        child: const Text('Try again'),
+                      ),
+                    ],
+                  );
+                }
+                final slots = snapshot.data ?? const <AppointmentSlot>[];
+                if (slots.isEmpty) {
+                  return const Text(
+                    'No appointments are available on this date. Please choose another date.',
+                  );
+                }
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: slots.map((slot) {
+                    final selected = selectedSlot?.startTime == slot.startTime;
+                    return ChoiceChip(
+                      label: Text(slot.startTime),
+                      selected: selected,
+                      onSelected: (_) => setState(() => selectedSlot = slot),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
           const SizedBox(height: 28),
           FilledButton(
-            onPressed: doctor == null || service == null
+            onPressed: doctor == null || service == null || selectedSlot == null || submitting
                 ? null
                 : () async {
+                    setState(() => submitting = true);
                     try {
                       final appointment = await ref
                           .read(clinicRepositoryProvider)
@@ -118,15 +185,13 @@ class _BookingPageState extends ConsumerState<BookingPage> {
                             doctor: doctor!,
                             service: service!,
                             date: date,
-                            startTime: time,
+                            startTime: selectedSlot!.startTime,
                           );
                       ref.invalidate(appointmentsProvider);
-
                       if (!context.mounted) return;
-
                       await showDialog<void>(
                         context: context,
-                        builder: (_) => AlertDialog(
+                        builder: (dialogContext) => AlertDialog(
                           title: const Text('Appointment confirmed'),
                           content: Text(
                             '${appointment.number}\n'
@@ -147,9 +212,20 @@ class _BookingPageState extends ConsumerState<BookingPage> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(content: Text('Booking failed: $error')),
                       );
+                      // Another patient may have taken the slot after it was
+                      // displayed. Refresh instead of allowing a stale retry.
+                      _refreshAvailability();
+                    } finally {
+                      if (mounted) setState(() => submitting = false);
                     }
                   },
-            child: const Text('Confirm appointment'),
+            child: submitting
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Confirm appointment'),
           ),
         ],
       ),
