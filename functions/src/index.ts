@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { buildAvailableSlots, isInsideSchedule } from './scheduling';
 
 initializeApp();
 const db = getFirestore();
@@ -69,39 +70,6 @@ function clinicDateParts(timeZone: string, date = new Date()): { date: string; t
   return { date: `${value('year')}-${value('month')}-${value('day')}`, time: `${value('hour')}:${value('minute')}` };
 }
 
-function scheduleForDate(doctor: FirebaseFirestore.DocumentData, date: string): Array<{ startTime: string; endTime: string }> {
-  const override = doctor.scheduleOverrides?.[date];
-  if (Array.isArray(override)) return override;
-  if (Array.isArray(doctor.leaveDates) && doctor.leaveDates.includes(date)) return [];
-  const dayOfWeek = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-  if (!Array.isArray(doctor.weeklySchedule)) return [];
-  return doctor.weeklySchedule
-    .filter((entry: FirebaseFirestore.DocumentData) => Number(entry.dayOfWeek) === dayOfWeek)
-    .map((entry: FirebaseFirestore.DocumentData) => ({
-      startTime: String(entry.startTime ?? ''),
-      endTime: String(entry.endTime ?? ''),
-    }));
-}
-
-function isInsideSchedule(
-  doctor: FirebaseFirestore.DocumentData,
-  date: string,
-  startTime: string,
-  endTime: string,
-): boolean {
-  const start = timeToMinutes(startTime);
-  const end = timeToMinutes(endTime);
-  return scheduleForDate(doctor, date).some((window) =>
-    /^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.startTime) &&
-    /^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.endTime) &&
-    start >= timeToMinutes(window.startTime) &&
-    end <= timeToMinutes(window.endTime) &&
-    timeToMinutes(window.endTime) > timeToMinutes(window.startTime) &&
-    Number.isInteger(Number(doctor.slotIntervalMinutes ?? 15)) &&
-    Number(doctor.slotIntervalMinutes ?? 15) >= 5 &&
-    (start - timeToMinutes(window.startTime)) % Number(doctor.slotIntervalMinutes ?? 15) === 0);
-}
-
 function appointmentDuration(service: FirebaseFirestore.DocumentData, doctor: FirebaseFirestore.DocumentData): number {
   const duration = Number(service.durationMinutes ?? doctor.durationMinutes ?? 30);
   if (!Number.isInteger(duration) || duration < 5 || duration > 480) {
@@ -160,20 +128,14 @@ export const getAppointmentAvailability = onCall(async (request) => {
       start: timeToMinutes(String(doc.data().startTime ?? '00:00')),
       end: timeToMinutes(String(doc.data().endTime ?? '00:00')),
     }));
-  const slots: Array<{ startTime: string; endTime: string; durationMinutes: number }> = [];
-  const format = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-  for (const window of scheduleForDate(doctor, appointmentDate)) {
-    if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.startTime) ||
-        !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(window.endTime)) continue;
-    const windowStart = timeToMinutes(window.startTime);
-    const windowEnd = timeToMinutes(window.endTime);
-    for (let start = windowStart; start + duration <= windowEnd; start += interval) {
-      const end = start + duration;
-      if (appointmentDate === localNow.date && start <= timeToMinutes(localNow.time)) continue;
-      if (occupied.some((booking) => start < booking.end && booking.start < end)) continue;
-      slots.push({ startTime: format(start), endTime: format(end), durationMinutes: duration });
-    }
-  }
+  const slots = buildAvailableSlots(
+    doctor,
+    appointmentDate,
+    duration,
+    interval,
+    occupied,
+    appointmentDate === localNow.date ? timeToMinutes(localNow.time) : -1,
+  );
   return { slots, timezone };
 });
 
