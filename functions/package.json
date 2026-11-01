@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc",
     "deploy": "npm run build && firebase deploy --only functions",
-    "test:rules": "node --test test/firestore.rules.test.cjs"
+    "test:rules": "node --test test/firestore.rules.test.cjs",
+    "test:scheduling": "node --test test/scheduling.test.cjs"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",
