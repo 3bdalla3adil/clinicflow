@@ -67,7 +67,7 @@ jobs:
   android:
     name: Build and verify Android APK
     needs: validate
-    if: inputs.platform == 'android' || inputs.platform == 'both'
+    if: github.event_name == 'push' || inputs.platform == 'android' || inputs.platform == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -221,7 +221,7 @@ jobs:
   ios:
     name: Build and verify unsigned iOS IPA
     needs: validate
-    if: inputs.platform == 'ios' || inputs.platform == 'both'
+    if: github.event_name == 'push' || inputs.platform == 'ios' || inputs.platform == 'both'
     runs-on: macos-15
     timeout-minutes: 60
     steps:
