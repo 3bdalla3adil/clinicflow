@@ -434,7 +434,8 @@ jobs:
           tag_name: clinicflow-downloads
           name: ClinicFlow Mobile Downloads
           body: |
-            Rolling ClinicFlow Android and iOS prerelease channel. Assets are replaced only after both platform builds and package verification succeed.\n            Source commit: \`${{ github.sha }}\`.
+            Rolling ClinicFlow Android and iOS prerelease channel. Assets are replaced only after both platform builds and package verification succeed.
+            Source commit: \`${{ github.sha }}\`.
 
             - **Android:** `clinicflow.apk` — installable Android package.
             - **iOS:** `clinicflow-unsigned.ipa` — unsigned; Apple signing and provisioning are required before installation.
