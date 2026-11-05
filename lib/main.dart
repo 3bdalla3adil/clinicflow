@@ -12,8 +12,11 @@ Future<void> main() async {
   // accesses FirebaseAuth/Firestore.
   try {
     await Firebase.initializeApp();
-  } on FirebaseException catch (e) {
-    debugPrint('Firebase initialization skipped: ${e.code}: ${e.message}');
+  } catch (error, stackTrace) {
+    // Continue in isolated demo mode when native Firebase configuration is
+    // absent. Firebase-backed actions are disabled by firebaseAvailableProvider.
+    debugPrint('Firebase initialization failed: $error');
+    debugPrintStack(stackTrace: stackTrace);
   }
 
   runApp(const ProviderScope(child: ClinicFlowApp()));

@@ -1,0 +1,69 @@
+name: Deploy ClinicFlow Firebase Backend
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FIREBASE_PROJECT_ID: clinic-app-v4
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure Firebase service account
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 || secrets.FIREBASE_ADMIN_SERVICE_ACCOUNT_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$FIREBASE_SERVICE_ACCOUNT" || {
+            echo "::error::Set the FIREBASE_SERVICE_ACCOUNT_BASE64 repository Actions secret."
+            exit 1
+          }
+          python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          raw = os.environ["FIREBASE_SERVICE_ACCOUNT"].strip()
+          try:
+              decoded = base64.b64decode("".join(raw.split()), validate=True)
+              data = json.loads(decoded.decode("utf-8"))
+          except Exception:
+              data = json.loads(raw)
+          if data.get("project_id") != os.environ["FIREBASE_PROJECT_ID"]:
+              raise SystemExit("Service account project_id does not match clinic-app-v4")
+          if not data.get("client_email") or not data.get("private_key"):
+              raise SystemExit("Service account JSON is missing client_email or private_key")
+          path = Path(os.environ["RUNNER_TEMP"]) / "clinicflow-firebase-service-account.json"
+          path.write_text(json.dumps(data), encoding="utf-8")
+          path.chmod(0o600)
+          print("Validated Firebase service account for clinic-app-v4")
+          PY
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/clinicflow-firebase-service-account.json" >> "$GITHUB_ENV"
+
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Install and build Cloud Functions
+        working-directory: functions
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Deploy Cloud Functions and Firestore configuration
+        run: |
+          firebase deploy --project "$FIREBASE_PROJECT_ID" --only functions,firestore:rules,firestore:indexes --non-interactive
+
+      - name: Remove temporary service account
+        if: always()
+        run: rm -f "$RUNNER_TEMP/clinicflow-firebase-service-account.json"

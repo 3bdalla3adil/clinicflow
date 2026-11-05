@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -38,6 +39,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             _emailController.text.trim(),
             _passwordController.text,
           );
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
       if (!mounted) return;
       context.go('/dashboard');
     } catch (error) {
@@ -48,19 +51,87 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
-  Future<void> _resetPassword() async {
-    final email = _emailController.text.trim();
-    if (email.isEmpty ||
-        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email)) {
-      setState(() => _error = 'Enter a valid email address first.');
-      return;
-    }
+  Future<void> _signInWithGoogle() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      await ref.read(clinicRepositoryProvider).sendPasswordReset(email);
+      await ref.read(clinicRepositoryProvider).signInWithGoogle();
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
+      if (!mounted) return;
+      context.go('/dashboard');
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      if (error.code == 'popup-closed-by-user' ||
+          error.code == 'web-context-cancelled') {
+        return;
+      }
+      setState(() => _error = switch (error.code) {
+        'account-exists-with-different-credential' =>
+          'An account already exists with a different sign-in method.',
+        'network-request-failed' =>
+          'Network unavailable. Check your connection and try again.',
+        'user-disabled' => 'This account has been disabled. Contact the clinic.',
+        _ => 'Google sign-in failed. Please try again.',
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _resetPassword() async {
+    // Password recovery has its own explicit email input. Signing in never
+    // triggers this operation and no demo/test email is ever substituted.
+    final resetEmailController =
+        TextEditingController(text: _emailController.text.trim());
+    final email = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reset password'),
+        content: TextField(
+          controller: resetEmailController,
+          autofocus: true,
+          keyboardType: TextInputType.emailAddress,
+          autofillHints: const [AutofillHints.email],
+          decoration: const InputDecoration(
+            labelText: 'Email address',
+            hintText: 'name@example.com',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(resetEmailController.text.trim()),
+            child: const Text('Send reset email'),
+          ),
+        ],
+      ),
+    );
+    resetEmailController.dispose();
+    if (!mounted || email == null) return;
+
+    final normalizedEmail = email.trim();
+    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+        .hasMatch(normalizedEmail)) {
+      setState(() => _error = 'Enter a valid email address.');
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await ref.read(clinicRepositoryProvider).sendPasswordReset(normalizedEmail);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -69,10 +140,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
           ),
         ),
       );
-    } catch (_) {
+    } on FirebaseAuthException catch (error) {
       if (!mounted) return;
-      setState(() => _error =
-          'Unable to send a reset email. Check the address and try again.');
+      setState(() => _error = switch (error.code) {
+        'invalid-email' => 'Enter a valid email address.',
+        'user-not-found' =>
+          'No ClinicFlow account was found for that email address.',
+        'network-request-failed' =>
+          'Network unavailable. Check your connection and try again.',
+        'too-many-requests' =>
+          'Too many attempts. Please wait before requesting another email.',
+        _ => 'Unable to send the reset email. Please try again.',
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'Unable to send the reset email: $error');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -90,6 +172,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         throw StateError('Failed to enter isolated demo mode.');
       }
       await repository.signInAsDemoGuest();
+      ref.invalidate(currentUserProvider);
+      await ref.read(currentUserProvider.future);
       if (!mounted) return;
       context.go('/dashboard');
     } catch (error) {
@@ -103,6 +187,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    final firebaseAvailable = ref.watch(firebaseAvailableProvider);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -163,16 +248,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           ? 'Password is required'
                           : null,
                       onFieldSubmitted: (_) {
-                        if (!_loading) _signIn();
+                        if (!_loading && firebaseAvailable) _signIn();
                       },
                     ),
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: _loading ? null : _resetPassword,
+                        onPressed: _loading || !firebaseAvailable ? null : _resetPassword,
                         child: const Text('Forgot password?'),
                       ),
                     ),
+                    if (!firebaseAvailable) ...[
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Firebase is not configured in this build. Email sign-in, Google sign-in, password reset, and guest booking are unavailable. Use Try Demo or rebuild with the Firebase Android/iOS configuration.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.deepOrange),
+                      ),
+                    ],
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(
@@ -184,7 +277,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     SizedBox(
                       height: 50,
                       child: ElevatedButton(
-                        onPressed: _loading ? null : _signIn,
+                        onPressed: _loading || !firebaseAvailable ? null : _signIn,
                         child: _loading
                             ? const SizedBox(
                                 width: 22,
@@ -196,12 +289,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     const SizedBox(height: 16),
                     OutlinedButton.icon(
-                      onPressed: _loading ? null : () => context.push('/guest'),
+                      onPressed: _loading || !firebaseAvailable ? null : () => context.push('/guest'),
                       icon: const Icon(Icons.person_outline),
                       label: const Text('Continue as guest'),
                     ),
                     const SizedBox(height: 12),
                     const Divider(),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _loading || !firebaseAvailable ? null : _signInWithGoogle,
+                      icon: const Icon(Icons.g_mobiledata, size: 28),
+                      label: const Text('Continue with Google'),
+                    ),
                     const SizedBox(height: 12),
                     FilledButton.tonalIcon(
                       onPressed: _loading ? null : _tryDemo,
