@@ -372,12 +372,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Move rolling prerelease tag to this verified source commit
-        run: |
-          set -euo pipefail
-          git tag --force clinicflow-downloads "$GITHUB_SHA"
-          git push origin refs/tags/clinicflow-downloads --force
-
       - name: Download Android build artifact
         uses: actions/download-artifact@v4
         with:
@@ -427,6 +421,12 @@ jobs:
           (cd dist && zip -q clinicflow-mobile-downloads.zip clinicflow.apk clinicflow-unsigned.ipa README.txt)
           unzip -t dist/clinicflow-mobile-downloads.zip
           ls -lh dist/
+
+      - name: Move rolling prerelease tag to this verified source commit
+        run: |
+          set -euo pipefail
+          git tag --force clinicflow-downloads "$GITHUB_SHA"
+          git push origin refs/tags/clinicflow-downloads --force
 
       - name: Publish one combined mobile prerelease
         uses: softprops/action-gh-release@v2
