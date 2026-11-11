@@ -39,6 +39,25 @@ function isValidCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function optionalScheduleObject(value: unknown, name: string): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpsError('invalid-argument', `${name} must be an object.`);
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 31) throw new HttpsError('invalid-argument', `${name} has too many entries.`);
+  return Object.fromEntries(entries);
+}
+
+function optionalDateList(value: unknown, name: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > 366 ||
+      !value.every((item) => typeof item === 'string' && isValidCalendarDate(item))) {
+    throw new HttpsError('invalid-argument', `${name} must contain valid YYYY-MM-DD dates.`);
+  }
+  return [...new Set(value as string[])].sort();
+}
+
 function isAssignedDoctor(actorUid: string, doctorId: string, doctorData: FirebaseFirestore.DocumentData): boolean {
   return actorUid === doctorId ||
     [doctorData.userId, doctorData.uid, doctorData.authUid, doctorData.userUid]
@@ -403,10 +422,18 @@ export const saveDoctor = onCall(async (request) => {
   const durationMinutes = Number(request.data?.durationMinutes ?? 30);
   const userId = String(request.data?.userId ?? '').trim();
   const doctorId = String(request.data?.doctorId ?? '').trim();
+  const slotIntervalMinutes = Number(request.data?.slotIntervalMinutes ?? 15);
+  const weeklySchedule = optionalScheduleObject(request.data?.weeklySchedule, 'weeklySchedule');
+  const scheduleOverrides = optionalScheduleObject(request.data?.scheduleOverrides, 'scheduleOverrides');
+  const leaveDates = optionalDateList(request.data?.leaveDates, 'leaveDates');
   if (clinicId !== actor.clinicId) throw new HttpsError('permission-denied', 'Clinic scope mismatch.');
   if (name.length > 120 || specialty.length > 120 ||
-      !Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 480) {
-    throw new HttpsError('invalid-argument', 'Doctor details or appointment duration are invalid.');
+      !Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 480 ||
+      !Number.isInteger(slotIntervalMinutes) || slotIntervalMinutes < 5 || slotIntervalMinutes > 120) {
+    throw new HttpsError('invalid-argument', 'Doctor details, appointment duration, or slot interval are invalid.');
+  }
+  if (scheduleOverrides && Object.keys(scheduleOverrides).some((date) => !isValidCalendarDate(date))) {
+    throw new HttpsError('invalid-argument', 'scheduleOverrides keys must be valid YYYY-MM-DD dates.');
   }
   const clinic = db.collection('clinics').doc(clinicId);
   const doctorRef = doctorId ? clinic.collection('doctors').doc(doctorId) : clinic.collection('doctors').doc();
@@ -422,8 +449,11 @@ export const saveDoctor = onCall(async (request) => {
     }
     const existing = await tx.get(doctorRef);
     tx.set(doctorRef, {
-      name, specialty, durationMinutes,
+      name, specialty, durationMinutes, slotIntervalMinutes,
       ...(userId ? { userId } : {}),
+      ...(weeklySchedule ? { weeklySchedule } : {}),
+      ...(scheduleOverrides ? { scheduleOverrides } : {}),
+      ...(leaveDates ? { leaveDates } : {}),
       active: request.data?.active !== false,
       updatedAt: FieldValue.serverTimestamp(),
       ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
